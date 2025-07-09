@@ -2,19 +2,13 @@ import { useEffect, useRef, useState } from "react";
 
 const AutoFocus = () => {
   const videoRef = useRef(null);
-  const grabCanvasRef = useRef(null);
   const photoCanvasRef = useRef(null);
   const [imageCapture, setImageCapture] = useState(null);
   const [videoDevices, setVideoDevices] = useState([]);
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
 
-  const isVirtualCamera = (label) => {
-    return /virtual|obs|snap|filter|manycam/i.test(label);
-  };
-
-  const isFrontCamera = (label) => {
-    return /前置|front|facetime|self/i.test(label || "");
-  };
+  const isVirtualCamera = (label) => /virtual|obs|snap|filter|manycam/i.test(label);
+  const isFrontCamera = (label) => /前置|front|facetime|self/i.test(label || "");
 
   const startCamera = (deviceId = null) => {
     const constraints = {
@@ -33,7 +27,14 @@ const AutoFocus = () => {
         const track = mediaStream.getVideoTracks()[0];
         const settings = track.getSettings();
         setCurrentDeviceId(settings.deviceId || deviceId);
-        setImageCapture(new ImageCapture(track));
+
+        if ("ImageCapture" in window) {
+          try {
+            setImageCapture(new ImageCapture(track));
+          } catch (err) {
+            console.warn("ImageCapture 無法初始化：", err);
+          }
+        }
       })
       .catch((error) => console.error("getUserMedia error:", error));
   };
@@ -78,19 +79,6 @@ const AutoFocus = () => {
     ctx.drawImage(img, 0, 0, img.width, img.height, x, y, img.width * ratio, img.height * ratio);
   };
 
-  const onGrabFrame = () => {
-    if (imageCapture) {
-      imageCapture
-        .grabFrame()
-        .then((imageBitmap) => {
-          if (grabCanvasRef.current) {
-            drawCanvas(grabCanvasRef.current, imageBitmap);
-          }
-        })
-        .catch((error) => console.error("grabFrame error:", error));
-    }
-  };
-
   const onTakePhoto = () => {
     if (imageCapture) {
       imageCapture
@@ -102,6 +90,8 @@ const AutoFocus = () => {
           }
         })
         .catch((error) => console.error("takePhoto error:", error));
+    } else {
+      console.warn("imageCapture 未準備好或不支援");
     }
   };
 
@@ -110,14 +100,9 @@ const AutoFocus = () => {
       <div>
         <video ref={videoRef} autoPlay playsInline style={{ width: "100%", maxWidth: "500px" }} />
         <div style={{ marginTop: "10px" }}>
-          <button onClick={onGrabFrame}>Grab Frame</button>
           <button onClick={onTakePhoto}>Take Photo</button>
         </div>
-        <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
-          <canvas
-            ref={grabCanvasRef}
-            style={{ width: "240px", height: "180px", border: "1px solid #ccc" }}
-          />
+        <div style={{ marginTop: "10px" }}>
           <canvas
             ref={photoCanvasRef}
             style={{ width: "240px", height: "180px", border: "1px solid #ccc" }}
