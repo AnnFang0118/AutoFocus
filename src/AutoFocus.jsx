@@ -8,67 +8,49 @@ const AutoFocus = () => {
   const [videoDevices, setVideoDevices] = useState([]);
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
 
-  const isVirtualCamera = (label) => /virtual|obs|snap|filter|manycam/i.test(label);
-
-  const startCamera = async (deviceId = null) => {
-    const constraints = {
-      video: deviceId ? { deviceId: { exact: deviceId } } : true,
-    };
-
-    try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-      const track = mediaStream.getVideoTracks()[0];
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-      }
-
-      setCurrentDeviceId(track.getSettings().deviceId || deviceId);
-      setImageCapture(new ImageCapture(track));
-    } catch (error) {
-      console.error("getUserMedia error:", error);
-    }
+  const isVirtualCamera = (label) => {
+    return /virtual|obs|snap|filter|manycam/i.test(label);
   };
 
-  const getBestCloseupCamera = async (devices) => {
-    for (const device of devices) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: device.deviceId } },
-        });
+  const isFrontCamera = (label) => {
+    return /前置|front|facetime|self/i.test(label || "");
+  };
 
-        const track = stream.getVideoTracks()[0];
-        const capabilities = track.getCapabilities();
+  const startCamera = (deviceId = null) => {
+    const constraints = {
+      video: deviceId
+        ? { deviceId: { exact: deviceId } }
+        : { facingMode: { exact: "environment" } },
+    };
 
-        // 近拍條件：zoom 高或 focusDistance 小
-        if (
-          (capabilities.zoom && capabilities.zoom.max >= 5) ||
-          (capabilities.focusDistance && capabilities.focusDistance.min <= 0.15)
-        ) {
-          stream.getTracks().forEach((t) => t.stop());
-          return device.deviceId;
+    navigator.mediaDevices
+      .getUserMedia(constraints)
+      .then((mediaStream) => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = mediaStream;
         }
 
-        stream.getTracks().forEach((t) => t.stop());
-      } catch (e) {
-        console.warn("試鏡頭失敗:", device.label, e);
-      }
-    }
-
-    return null;
+        const track = mediaStream.getVideoTracks()[0];
+        const settings = track.getSettings();
+        setCurrentDeviceId(settings.deviceId || deviceId);
+        setImageCapture(new ImageCapture(track));
+      })
+      .catch((error) => console.error("getUserMedia error:", error));
   };
 
   const getVideoDevices = async () => {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const videoInputs = devices.filter(
-      (d) => d.kind === "videoinput" && !isVirtualCamera(d.label || "")
+      (d) =>
+        d.kind === "videoinput" &&
+        !isVirtualCamera(d.label || "") &&
+        !isFrontCamera(d.label || "")
     );
 
     setVideoDevices(videoInputs);
 
     if (!currentDeviceId && videoInputs.length > 0) {
-      const preferredId = await getBestCloseupCamera(videoInputs);
-      startCamera(preferredId || videoInputs[0].deviceId);
+      startCamera(videoInputs[0].deviceId);
     }
   };
 
@@ -144,8 +126,8 @@ const AutoFocus = () => {
       </div>
 
       <div style={{ minWidth: "200px" }}>
-        <h3>可用鏡頭（實體1）</h3>
-        {videoDevices.length === 0 && <p>沒有偵測到實體鏡頭</p>}
+        <h3>可用鏡頭（後鏡頭）</h3>
+        {videoDevices.length === 0 && <p>沒有偵測到後鏡頭</p>}
         <ul>
           {videoDevices.map((device) => (
             <li key={device.deviceId}>
