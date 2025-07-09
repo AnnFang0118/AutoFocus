@@ -4,64 +4,34 @@ const AutoFocus = () => {
   const videoRef = useRef(null);
   const photoCanvasRef = useRef(null);
   const [imageCapture, setImageCapture] = useState(null);
-  const [videoDevices, setVideoDevices] = useState([]);
+  const [cameraList, setCameraList] = useState([]);
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
 
-  const isVirtualCamera = (label) => /virtual|obs|snap|filter|manycam/i.test(label);
-  const isFrontCamera = (label) => /前置|front|facetime|self/i.test(label || "");
-
-  const startCamera = (deviceId = null) => {
-    const constraints = {
-      video: deviceId
-        ? { deviceId: { exact: deviceId } }
-        : { facingMode: { exact: "environment" } },
-    };
-
-    navigator.mediaDevices
-      .getUserMedia(constraints)
-      .then((mediaStream) => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = mediaStream;
-        }
-
-        const track = mediaStream.getVideoTracks()[0];
-        const settings = track.getSettings();
-        setCurrentDeviceId(settings.deviceId || deviceId);
-
-        if ("ImageCapture" in window) {
-          try {
-            setImageCapture(new ImageCapture(track));
-          } catch (err) {
-            console.warn("ImageCapture 無法初始化：", err);
-          }
-        }
-      })
-      .catch((error) => console.error("getUserMedia error:", error));
-  };
-
-  const getVideoDevices = async () => {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const videoInputs = devices.filter(
-      (d) =>
-        d.kind === "videoinput" &&
-        !isVirtualCamera(d.label || "") &&
-        !isFrontCamera(d.label || "")
-    );
-
-    setVideoDevices(videoInputs);
-
-    if (!currentDeviceId && videoInputs.length > 0) {
-      startCamera(videoInputs[0].deviceId);
+  const stopCurrentStream = () => {
+    if (videoRef.current?.srcObject) {
+      videoRef.current.srcObject.getTracks().forEach((track) => track.stop());
     }
   };
 
-  useEffect(() => {
-    getVideoDevices();
-    navigator.mediaDevices.addEventListener("devicechange", getVideoDevices);
-    return () => {
-      navigator.mediaDevices.removeEventListener("devicechange", getVideoDevices);
-    };
-  }, []);
+  const startCamera = async (deviceId) => {
+    stopCurrentStream();
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId } }
+      });
+
+      const track = stream.getVideoTracks()[0];
+      const imageCap = new ImageCapture(track);
+
+      videoRef.current.srcObject = stream;
+      setImageCapture(imageCap);
+      setCurrentDeviceId(deviceId);
+    } catch (error) {
+      alert("無法啟用此鏡頭");
+      console.error("startCamera error:", error);
+    }
+  };
 
   const drawCanvas = (canvas, img) => {
     const canvasWidth = canvas.clientWidth;
@@ -90,38 +60,86 @@ const AutoFocus = () => {
           }
         })
         .catch((error) => console.error("takePhoto error:", error));
-    } else {
-      console.warn("imageCapture 未準備好或不支援");
     }
   };
+
+  const scanCameras = async () => {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoInputs = devices.filter((d) => d.kind === "videoinput");
+    const results = [];
+
+    for (let device of videoInputs) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: device.deviceId } }
+        });
+
+        const track = stream.getVideoTracks()[0];
+        const capabilities = track.getCapabilities();
+
+        const supportsFocus =
+          "focusMode" in capabilities &&
+          (capabilities.focusMode.includes("continuous") || capabilities.focusMode.includes("manual"));
+
+        results.push({
+          label: device.label || "未命名鏡頭",
+          deviceId: device.deviceId,
+          supportsFocus
+        });
+
+        stream.getTracks().forEach((t) => t.stop());
+      } catch (err) {
+        console.warn("無法啟用：", device.label, err);
+      }
+    }
+
+    setCameraList(results);
+
+    // 預設啟用第一顆可用鏡頭
+    if (results.length > 0) {
+      startCamera(results[0].deviceId);
+    }
+  };
+
+  useEffect(() => {
+    scanCameras();
+    navigator.mediaDevices.addEventListener("devicechange", scanCameras);
+    return () => {
+      navigator.mediaDevices.removeEventListener("devicechange", scanCameras);
+      stopCurrentStream();
+    };
+  }, []);
 
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: "20px" }}>
       <div>
-        <video ref={videoRef} autoPlay playsInline style={{ width: "100%", maxWidth: "500px" }} />
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          style={{ width: "100%", maxWidth: "500px", border: "1px solid black" }}
+        />
         <div style={{ marginTop: "10px" }}>
-          <button onClick={onTakePhoto}>Take Photo</button>
+          <button onClick={onTakePhoto}>📸 Take Photo</button>
         </div>
-        <div style={{ marginTop: "10px" }}>
-          <canvas
-            ref={photoCanvasRef}
-            style={{ width: "240px", height: "180px", border: "1px solid #ccc" }}
-          />
-        </div>
+        <canvas
+          ref={photoCanvasRef}
+          style={{ width: "240px", height: "180px", marginTop: "10px", border: "1px solid #ccc" }}
+        />
       </div>
 
-      <div style={{ minWidth: "200px" }}>
-        <h3>可用鏡頭（後鏡頭）</h3>
-        {videoDevices.length === 0 && <p>沒有偵測到後鏡頭</p>}
+      <div style={{ minWidth: "280px" }}>
+        <h3>📋 所有鏡頭</h3>
+        {cameraList.length === 0 && <p>沒有找到任何鏡頭</p>}
         <ul>
-          {videoDevices.map((device) => (
-            <li key={device.deviceId}>
-              {device.label || `Camera (${device.deviceId})`}
-              {device.deviceId === currentDeviceId && (
-                <strong style={{ color: "green" }}> ← 使用中</strong>
+          {cameraList.map((cam) => (
+            <li key={cam.deviceId} style={{ marginBottom: "10px" }}>
+              <strong>{cam.label}</strong> {cam.supportsFocus ? "✅ 自動對焦" : "❌ 無對焦"}
+              {cam.deviceId === currentDeviceId && (
+                <span style={{ color: "green" }}> ← 使用中</span>
               )}
               <br />
-              <button onClick={() => startCamera(device.deviceId)}>切換到這顆</button>
+              <button onClick={() => startCamera(cam.deviceId)}>使用這顆鏡頭</button>
             </li>
           ))}
         </ul>
@@ -131,3 +149,4 @@ const AutoFocus = () => {
 };
 
 export default AutoFocus;
+
