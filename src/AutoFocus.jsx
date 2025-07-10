@@ -1,141 +1,111 @@
 import { useEffect, useRef, useState } from "react";
 
-const SmartCamera = () => {
+const AndroidSafeCamera = () => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [videoDevices, setVideoDevices] = useState([]);
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
   const [imageCapture, setImageCapture] = useState(null);
+  const streamRef = useRef(null);
 
-  const isVirtualCamera = (label) => /virtual|obs|snap|filter|manycam/i.test(label || "");
-  const isFrontCamera = (label) => /前置|front|facetime|self/i.test(label || "");
+  const isFrontCamera = (label) => /front|前|face/i.test(label || "");
+  const isVirtualCamera = (label) => /virtual|snap|obs|manycam/i.test(label || "");
 
-  const drawCanvas = (canvas, imageBitmap) => {
+  const drawToCanvas = (bitmap) => {
+    const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
     const { width, height } = canvas.getBoundingClientRect();
     canvas.width = width;
     canvas.height = height;
 
     ctx.clearRect(0, 0, width, height);
-
-    const ratio = Math.min(width / imageBitmap.width, height / imageBitmap.height);
-    const x = (width - imageBitmap.width * ratio) / 2;
-    const y = (height - imageBitmap.height * ratio) / 2;
-
-    ctx.drawImage(
-      imageBitmap,
-      0,
-      0,
-      imageBitmap.width,
-      imageBitmap.height,
-      x,
-      y,
-      imageBitmap.width * ratio,
-      imageBitmap.height * ratio
-    );
+    const ratio = Math.min(width / bitmap.width, height / bitmap.height);
+    const x = (width - bitmap.width * ratio) / 2;
+    const y = (height - bitmap.height * ratio) / 2;
+    ctx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, x, y, bitmap.width * ratio, bitmap.height * ratio);
   };
 
   const takePhoto = () => {
-    if (imageCapture) {
-      imageCapture
-        .takePhoto()
-        .then(createImageBitmap)
-        .then((img) => drawCanvas(canvasRef.current, img))
-        .catch((err) => console.error("Take photo error:", err));
-    } else {
-      console.warn("ImageCapture not ready.");
+    if (!imageCapture) return;
+    imageCapture
+      .takePhoto()
+      .then(createImageBitmap)
+      .then(drawToCanvas)
+      .catch((err) => console.error("TakePhoto Error:", err));
+  };
+
+  const stopCurrentStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
     }
   };
 
-  const scoreCamera = async (deviceId) => {
+  const startCamera = async (deviceId) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+      stopCurrentStream();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId } },
+      });
+
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
+
       const track = stream.getVideoTracks()[0];
-      const caps = track.getCapabilities?.() || {};
-      const settings = track.getSettings?.() || {};
-
-      let score = 0;
-
-      // 評分邏輯
-      if (caps.focusMode?.includes("continuous")) score += 30;
-      if (caps.focusDistance?.min) score += Math.max(0, 20 - caps.focusDistance.min * 100); // 越小越好
-      if (caps.zoom?.max) score += caps.zoom.max * 2;
-      if (caps.width?.max && caps.height?.max) {
-        const pixels = caps.width.max * caps.height.max;
-        score += pixels / 100000; // 每10萬畫素加1分
-      }
-
-      track.stop();
-      return { deviceId, score };
+      setImageCapture(new ImageCapture(track));
+      setCurrentDeviceId(deviceId);
     } catch (err) {
-      console.warn("Score failed for", deviceId, err);
-      return { deviceId, score: 0 };
+      console.error("startCamera failed:", err);
     }
   };
 
-  const getVideoDevicesAndPickBest = async () => {
+  const listDevicesAndStartBest = async () => {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const filtered = devices.filter(
-      (d) => d.kind === "videoinput" && !isVirtualCamera(d.label) && !isFrontCamera(d.label)
+      (d) =>
+        d.kind === "videoinput" &&
+        !isVirtualCamera(d.label) &&
+        !isFrontCamera(d.label)
     );
 
     setVideoDevices(filtered);
 
-    const scores = await Promise.all(filtered.map((d) => scoreCamera(d.deviceId)));
-    const best = scores.sort((a, b) => b.score - a.score)[0];
-
-    if (best?.deviceId) {
-      startCamera(best.deviceId);
+    // fallback: 第 1 顆可用鏡頭
+    if (filtered.length > 0) {
+      startCamera(filtered[0].deviceId);
+    } else {
+      console.warn("沒有後鏡頭可用");
     }
   };
 
-  const startCamera = (deviceId) => {
-    const constraints = {
-      video: { deviceId: { exact: deviceId } },
-    };
-
-    navigator.mediaDevices
-      .getUserMedia(constraints)
-      .then((stream) => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-
-        const track = stream.getVideoTracks()[0];
-        setCurrentDeviceId(deviceId);
-
-        try {
-          setImageCapture(new ImageCapture(track));
-        } catch (e) {
-          console.warn("ImageCapture not supported:", e);
-        }
-      })
-      .catch((err) => {
-        console.error("startCamera error:", err);
-      });
-  };
-
   useEffect(() => {
-    getVideoDevicesAndPickBest();
+    listDevicesAndStartBest();
+    return () => stopCurrentStream();
   }, []);
 
   return (
-    <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 相機預覽</h2>
-      <video ref={videoRef} autoPlay playsInline style={{ width: "100%", maxWidth: "500px", border: "1px solid #ccc" }} />
-      <div style={{ marginTop: "10px" }}>
+    <div style={{ padding: 20 }}>
+      <h2>📷 後鏡頭預覽</h2>
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        style={{ width: "100%", maxWidth: 480, border: "1px solid #ccc" }}
+      />
+      <div style={{ marginTop: 10 }}>
         <button onClick={takePhoto}>Take Photo</button>
       </div>
       <canvas
         ref={canvasRef}
-        style={{ width: "240px", height: "180px", marginTop: "10px", border: "1px solid #ccc" }}
+        style={{ width: 240, height: 180, marginTop: 10, border: "1px solid #ccc" }}
       />
-      <h3 style={{ marginTop: "20px" }}>🎦 可用鏡頭</h3>
+      <h3 style={{ marginTop: 20 }}>📋 可用後鏡頭</h3>
       <ul>
         {videoDevices.map((d) => (
           <li key={d.deviceId}>
-            {d.label || `Camera (${d.deviceId})`}
-            {d.deviceId === currentDeviceId && <strong style={{ color: "green" }}> ← 使用中</strong>}
+            {d.label || "Camera"}
+            {d.deviceId === currentDeviceId && <strong> ← 使用中</strong>}
             <br />
             <button onClick={() => startCamera(d.deviceId)}>切換到這顆</button>
           </li>
@@ -145,4 +115,4 @@ const SmartCamera = () => {
   );
 };
 
-export default SmartCamera;
+export default AndroidSafeCamera;
