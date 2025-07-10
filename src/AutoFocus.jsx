@@ -6,37 +6,58 @@ const AutoFocus = () => {
   const [imageCapture, setImageCapture] = useState(null);
   const [videoDevices, setVideoDevices] = useState([]);
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
+  const streamRef = useRef(null); // 用於清理舊 stream
 
   const isVirtualCamera = (label) => /virtual|obs|snap|filter|manycam/i.test(label);
   const isFrontCamera = (label) => /前置|front|facetime|self/i.test(label || "");
 
-  const startCamera = (deviceId = null) => {
+  const stopCurrentStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+  };
+
+  const startCamera = async (deviceId = null) => {
+    stopCurrentStream();
+
     const constraints = {
       video: deviceId
         ? { deviceId: { exact: deviceId } }
         : { facingMode: { exact: "environment" } },
     };
 
-    navigator.mediaDevices
-      .getUserMedia(constraints)
-      .then((mediaStream) => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = mediaStream;
-        }
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = mediaStream;
 
-        const track = mediaStream.getVideoTracks()[0];
-        const settings = track.getSettings();
-        setCurrentDeviceId(settings.deviceId || deviceId);
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream;
+      }
 
-        if ("ImageCapture" in window) {
-          try {
-            setImageCapture(new ImageCapture(track));
-          } catch (err) {
-            console.warn("ImageCapture 無法初始化：", err);
+      const track = mediaStream.getVideoTracks()[0];
+      setCurrentDeviceId(track.getSettings().deviceId || deviceId);
+
+      // 嘗試建立 ImageCapture
+      if ("ImageCapture" in window) {
+        try {
+          const capture = new ImageCapture(track);
+          const capabilities = track.getCapabilities?.();
+          if (capabilities && "focusDistance" in capabilities) {
+            console.log("✅ 此鏡頭支援自動對焦能力");
           }
+          setImageCapture(capture);
+        } catch (err) {
+          console.warn("⚠️ ImageCapture 建立失敗：", err);
+          setImageCapture(null);
         }
-      })
-      .catch((error) => console.error("getUserMedia error:", error));
+      } else {
+        console.warn("⚠️ 不支援 ImageCapture");
+        setImageCapture(null);
+      }
+    } catch (error) {
+      console.error("getUserMedia error:", error);
+    }
   };
 
   const getVideoDevices = async () => {
@@ -50,6 +71,7 @@ const AutoFocus = () => {
 
     setVideoDevices(videoInputs);
 
+    // 自動啟用第一顆可用後鏡頭
     if (!currentDeviceId && videoInputs.length > 0) {
       startCamera(videoInputs[0].deviceId);
     }
@@ -60,6 +82,7 @@ const AutoFocus = () => {
     navigator.mediaDevices.addEventListener("devicechange", getVideoDevices);
     return () => {
       navigator.mediaDevices.removeEventListener("devicechange", getVideoDevices);
+      stopCurrentStream();
     };
   }, []);
 
@@ -91,7 +114,7 @@ const AutoFocus = () => {
         })
         .catch((error) => console.error("takePhoto error:", error));
     } else {
-      console.warn("imageCapture 未準備好或不支援");
+      console.warn("ImageCapture 不可用");
     }
   };
 
@@ -111,7 +134,7 @@ const AutoFocus = () => {
       </div>
 
       <div style={{ minWidth: "200px" }}>
-        <h3>可用鏡頭（後鏡頭）</h3>
+        <h3>📋 可用鏡頭（後鏡頭）</h3>
         {videoDevices.length === 0 && <p>沒有偵測到後鏡頭</p>}
         <ul>
           {videoDevices.map((device) => (
@@ -131,3 +154,4 @@ const AutoFocus = () => {
 };
 
 export default AutoFocus;
+
