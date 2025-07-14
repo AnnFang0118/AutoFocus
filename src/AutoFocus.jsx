@@ -2,68 +2,111 @@ import { useEffect, useRef, useState } from "react";
 
 const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-const AutoCamera = () => {
+const AutoCameraSimple = () => {
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const [devices, setDevices] = useState([]);
-  const [stream, setStream] = useState(null);
-  const [imageCapture, setImageCapture] = useState(null);
-  const [currentDeviceId, setCurrentDeviceId] = useState(null);
+  const [deviceList, setDeviceList] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const isVirtual = (label) => /virtual|snap|obs|filter/i.test(label);
-  const isFrontCamera = (label) => /front|facetime|self|前/i.test(label);
 
   const stopStream = () => {
+    const stream = videoRef.current?.srcObject;
     if (stream) {
-      stream.getTracks().forEach((t) => t.stop());
-      setStream(null);
+      stream.getTracks().forEach((track) => track.stop());
+      videoRef.current.srcObject = null;
     }
-    setImageCapture(null);
   };
 
-  const getDevices = async () => {
+  const getAllDevices = async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ video: true }); // unlock labels
-      const all = await navigator.mediaDevices.enumerateDevices();
-      const filtered = all.filter(
-        (d) =>
-          d.kind === "videoinput" &&
-          !isVirtual(d.label || "") &&
-          !isFrontCamera(d.label || "")
-      );
-      return filtered;
+      await navigator.mediaDevices.getUserMedia({ video: true });
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter((d) => d.kind === "videoinput");
     } catch (err) {
-      setError("🚫 無法取得相機清單，請確認權限");
+      console.error("getDevices error:", err);
+      setError("🚫 取得鏡頭清單失敗");
       return [];
     }
   };
 
-  const detectAutoFocus = async (list) => {
-    const results = [];
-
-    for (const d of list) {
-      try {
-        const testStream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: d.deviceId } },
-        });
-        const track = testStream.getVideoTracks()[0];
-        const caps = track.getCapabilities?.();
-        const hasAF =
-          caps?.focusMode?.includes("continuous") ||
-          caps?.focusMode?.includes("auto");
-        track.stop();
-        if (hasAF) results.push(d);
-      } catch (_) {}
+  const hasAutoFocus = async (deviceId) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId } },
+      });
+      const track = stream.getVideoTracks()[0];
+      const caps = track.getCapabilities?.();
+      track.stop();
+      return caps?.focusMode?.includes("auto") || caps?.focusMode?.includes("continuous");
+    } catch {
+      return false;
     }
+  };
 
-    return results;
+  const pickBestCamera = async (devices) => {
+    for (const device of devices) {
+      if (await hasAutoFocus(device.deviceId)) return device.deviceId;
+    }
+    return devices[0]?.deviceId || null;
   };
 
   const startCamera = async (deviceId = null) => {
-    if (loading) return;
-    setLoading(true);
+    stopStream();
+    try {
+      const constraints = isIOS
+        ? { video: { facingMode: { exact: "environment" } } }
+        : { video: { deviceId: { exact: deviceId } } };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      videoRef.current.srcObject = stream;
+      setSelectedDeviceId(deviceId);
+    } catch (err) {
+      console.error("startCamera error:", err);
+      setError("🚫 相機啟用失敗");
+    }
+  };
+
+  useEffect(() => {
+    (async () => {
+      const allDevices = await getAllDevices();
+      setDeviceList(allDevices);
+
+      const bestId = isIOS
+        ? null
+        : await pickBestCamera(allDevices);
+
+      await startCamera(bestId);
+    })();
+
+    return () => stopStream();
+  }, []);
+
+  return (
+    <div style={{ padding: "20px", fontFamily: "sans-serif" }}>
+      <h2>📷 相機預覽</h2>
+      {error && <p style={{ color: "red" }}>{error}</p>}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        style={{ width: "100%", maxWidth: "480px", border: "1px solid #ccc" }}
+      />
+      <h3 style={{ marginTop: "20px" }}>🎛️ 所有相機裝置</h3>
+      <ul>
+        {deviceList.map((d) => (
+          <li key={d.deviceId}>
+            {d.label || "未命名鏡頭"}
+            {d.deviceId === selectedDeviceId && (
+              <strong style={{ color: "green" }}> ← 使用中</strong>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
+
+export default AutoCameraSimple;
     setError("");
 
     try {
