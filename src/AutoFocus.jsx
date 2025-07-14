@@ -10,6 +10,7 @@ const AutoCamera = () => {
   const [imageCapture, setImageCapture] = useState(null);
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const isVirtual = (label) => /virtual|snap|obs|filter/i.test(label);
   const isFrontCamera = (label) => /front|facetime|self|前/i.test(label);
@@ -24,7 +25,7 @@ const AutoCamera = () => {
 
   const getDevices = async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ video: true }); // 取得權限才能拿 label
+      await navigator.mediaDevices.getUserMedia({ video: true }); // unlock labels
       const all = await navigator.mediaDevices.enumerateDevices();
       const filtered = all.filter(
         (d) =>
@@ -34,7 +35,7 @@ const AutoCamera = () => {
       );
       return filtered;
     } catch (err) {
-      setError("🚫 無法取得相機裝置，請確認權限或瀏覽器支援性。");
+      setError("🚫 無法取得相機清單，請確認權限");
       return [];
     }
   };
@@ -53,26 +54,38 @@ const AutoCamera = () => {
           caps?.focusMode?.includes("continuous") ||
           caps?.focusMode?.includes("auto");
         track.stop();
-        if (hasAF) {
-          results.push(d);
-        }
-      } catch (_) {
-        // skip errored
-      }
+        if (hasAF) results.push(d);
+      } catch (_) {}
     }
 
     return results;
   };
 
   const startCamera = async (deviceId = null) => {
+    if (loading) return;
+    setLoading(true);
+    setError("");
+
     try {
       stopStream();
+      await new Promise((r) => setTimeout(r, 200));
 
       const constraints = isIOS
         ? { video: { facingMode: { exact: "environment" } } }
         : { video: { deviceId: { exact: deviceId } } };
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      let mediaStream;
+
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (err) {
+        // fallback: 若 deviceId 無效則改用 facingMode
+        console.warn("使用 deviceId 啟動失敗，嘗試 fallback:", err);
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: "environment" } },
+        });
+      }
+
       setStream(mediaStream);
       setCurrentDeviceId(deviceId);
 
@@ -90,8 +103,10 @@ const AutoCamera = () => {
         }
       }
     } catch (err) {
-      console.error("無法啟用相機：", err);
-      setError("🚫 啟用相機失敗，可能不支援或未授權。");
+      console.error("啟用相機失敗：", err);
+      setError("🚫 無法啟用相機，請檢查權限與瀏覽器相容性");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -111,10 +126,11 @@ const AutoCamera = () => {
         ctx.drawImage(bitmap, 0, 0);
         return;
       } catch (err) {
-        console.warn("ImageCapture 拍照失敗，改用截圖", err);
+        console.warn("ImageCapture 拍照失敗，使用截圖方式", err);
       }
     }
 
+    // fallback：畫面截圖方式
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -123,12 +139,11 @@ const AutoCamera = () => {
   useEffect(() => {
     (async () => {
       const allDevices = await getDevices();
-
       let chosen = null;
 
       if (isIOS) {
         chosen = allDevices[0];
-        await startCamera();
+        await startCamera(); // iOS 改用 facingMode
       } else {
         const withAF = await detectAutoFocus(allDevices);
         chosen = withAF[0] || allDevices[0];
@@ -183,7 +198,9 @@ const AutoCamera = () => {
             )}
             {!isIOS && (
               <div>
-                <button onClick={() => startCamera(d.deviceId)}>切換</button>
+                <button onClick={() => startCamera(d.deviceId)} disabled={loading}>
+                  切換
+                </button>
               </div>
             )}
           </li>
@@ -194,4 +211,5 @@ const AutoCamera = () => {
 };
 
 export default AutoCamera;
+
 
