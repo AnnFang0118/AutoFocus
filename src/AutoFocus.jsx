@@ -56,10 +56,21 @@ const AutoFocusCamera = () => {
 
   const updateDeviceListWithFocus = async () => {
     try {
+      // 🔓 必須先取得權限，iPhone 才能拿到 label
+      await navigator.mediaDevices.getUserMedia({ video: true });
+
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoInputs = devices.filter(d => d.kind === 'videoinput');
 
       const enrichedDevices = await Promise.all(videoInputs.map(async (device) => {
+        if (isIPhone) {
+          return {
+            deviceId: device.deviceId,
+            label: device.label || '未命名相機',
+            hasAutoFocus: null,
+          };
+        }
+
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
             video: { deviceId: { exact: device.deviceId } }
@@ -93,11 +104,11 @@ const AutoFocusCamera = () => {
 
   useEffect(() => {
     (async () => {
-      let devices = [];
+      const devices = await updateDeviceListWithFocus();
       if (isIPhone) {
-        await startCamera(); // iPhone: 使用環境鏡頭
+        // iPhone 只能用 facingMode 啟動後鏡頭
+        await startCamera();
       } else {
-        devices = await updateDeviceListWithFocus();
         const preferred = devices.find(d => d.hasAutoFocus);
         await startCamera(preferred?.deviceId || devices[0]?.deviceId);
       }
@@ -137,32 +148,34 @@ const AutoFocusCamera = () => {
         }}
       />
 
-      {!isIPhone && (
-        <>
-          <h3>🎛️ 可選相機</h3>
-          <ul>
-            {deviceList.map(device => (
-              <li key={device.deviceId} style={{ marginBottom: '10px' }}>
-                <strong>{device.label}</strong>
-                {device.hasAutoFocus && <span style={{ color: 'green' }}> ✅ 自動對焦</span>}
-                {!device.hasAutoFocus && <span style={{ color: 'gray' }}> ⚠️ 無自動對焦</span>}
-                {device.deviceId === selectedDeviceId && (
-                  <strong style={{ color: 'blue' }}> ← 使用中</strong>
-                )}
+      <h3>🎛️ 可用相機裝置</h3>
+      <ul>
+        {deviceList.map(device => (
+          <li key={device.deviceId} style={{ marginBottom: '10px' }}>
+            <strong>{device.label}</strong>
+            {device.hasAutoFocus === true && (
+              <span style={{ color: 'green' }}> ✅ 自動對焦</span>
+            )}
+            {device.hasAutoFocus === false && (
+              <span style={{ color: 'gray' }}> ⚠️ 無自動對焦</span>
+            )}
+            {device.hasAutoFocus === null && (
+              <span style={{ color: 'gray' }}> 📱 無法偵測（iPhone 限制）</span>
+            )}
+            {device.deviceId === selectedDeviceId && (
+              <strong style={{ color: 'blue' }}> ← 使用中</strong>
+            )}
+            {!isIPhone && (
+              <>
                 <br />
                 <button onClick={() => startCamera(device.deviceId)}>切換</button>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 };
 
 export default AutoFocusCamera;
-
-
-
-
-
