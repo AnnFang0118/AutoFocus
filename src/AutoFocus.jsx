@@ -1,149 +1,149 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from 'react';
 
-const isIOS = /iPhone|iPad/i.test(navigator.userAgent);
-
-const SmartCamera = () => {
+const AutoFocusCamera = () => {
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const [videoDevices, setVideoDevices] = useState([]);
-  const [currentDeviceId, setCurrentDeviceId] = useState(null);
+  const photoCanvasRef = useRef(null);
+  const [info, setInfo] = useState('初始化中...');
   const [imageCapture, setImageCapture] = useState(null);
-  const [mode, setMode] = useState("init");
+  const [deviceList, setDeviceList] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
 
-  const isVirtual = (label = "") => /virtual|obs|snap|manycam/i.test(label);
-  const isFront = (label = "") => /front|前置|facetime|self/i.test(label);
-
-  const drawImage = (bitmap) => {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    const { width, height } = bitmap;
-
-    canvas.width = width;
-    canvas.height = height;
-    ctx.drawImage(bitmap, 0, 0, width, height);
+  const stopStream = () => {
+    if (videoRef.current?.srcObject) {
+      const tracks = videoRef.current.srcObject.getTracks();
+      tracks.forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+    }
   };
 
-  const takePhoto = async () => {
+  const drawToCanvas = (canvas, bitmap) => {
+    const ctx = canvas.getContext('2d');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    ctx.drawImage(bitmap, 0, 0);
+  };
+
+  const handleTakePhoto = () => {
     if (!imageCapture) return;
-
-    if (!isIOS && imageCapture.takePhoto) {
-      try {
-        const blob = await imageCapture.takePhoto();
-        const bitmap = await createImageBitmap(blob);
-        drawImage(bitmap);
-      } catch (err) {
-        console.warn("takePhoto 失敗，改用 grabFrame", err);
-        grabFrameFallback();
-      }
-    } else {
-      grabFrameFallback();
-    }
+    imageCapture.takePhoto()
+      .then(blob => createImageBitmap(blob))
+      .then(bitmap => {
+        if (photoCanvasRef.current) {
+          drawToCanvas(photoCanvasRef.current, bitmap);
+        }
+      })
+      .catch(err => console.error('Take photo error:', err));
   };
 
-  const grabFrameFallback = async () => {
-    if (!imageCapture || !imageCapture.grabFrame) return;
+  const startCamera = async (deviceId) => {
     try {
-      const bitmap = await imageCapture.grabFrame();
-      drawImage(bitmap);
-    } catch (err) {
-      console.error("grabFrame 失敗", err);
-    }
-  };
-
-  const startCamera = async (deviceId = null) => {
-    const constraints = {
-      video: deviceId
-        ? { deviceId: { exact: deviceId } }
-        : { facingMode: { exact: "environment" } },
-    };
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      stopStream();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId } }
+      });
       const track = stream.getVideoTracks()[0];
-      const settings = track.getSettings();
-      setCurrentDeviceId(settings.deviceId);
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-
-      // 嘗試初始化 ImageCapture
-      try {
-        const capture = new ImageCapture(track);
-        setImageCapture(capture);
-      } catch (err) {
-        console.warn("ImageCapture 初始化失敗", err);
-      }
+      const capture = new ImageCapture(track);
+      videoRef.current.srcObject = stream;
+      videoRef.current.play();
+      setImageCapture(capture);
+      setSelectedDeviceId(deviceId);
     } catch (err) {
-      console.error("無法啟用相機", err);
+      console.error('Start camera failed:', err);
     }
   };
 
-  const getCameras = async () => {
+  const findBestAutoFocusCamera = async () => {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const cameras = devices.filter(
-      (d) => d.kind === "videoinput" && !isVirtual(d.label) && !isFront(d.label)
-    );
-    setVideoDevices(cameras);
+    const videoInputs = devices.filter(d => d.kind === 'videoinput');
+    setDeviceList(videoInputs);
 
-    if (cameras.length > 0) {
-      startCamera(cameras[0].deviceId);
+    for (const device of videoInputs) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: device.deviceId } }
+        });
+        const track = stream.getVideoTracks()[0];
+        const caps = track.getCapabilities?.();
+        const hasAutoFocus =
+          caps?.focusMode?.includes('continuous') ||
+          caps?.focusMode?.includes('auto');
+
+        // 清掉測試用 stream
+        track.stop();
+
+        if (hasAutoFocus) {
+          return device.deviceId;
+        }
+      } catch (_) {
+        // skip failed devices
+      }
     }
+
+    // fallback: 找第一個後鏡頭
+    const fallback = videoInputs.find(d =>
+      /back|rear|wide|environment|主|後/i.test(d.label)
+    );
+    return fallback?.deviceId || videoInputs[0]?.deviceId || null;
   };
 
   useEffect(() => {
-    getCameras();
-    navigator.mediaDevices.addEventListener("devicechange", getCameras);
-    return () => {
-      navigator.mediaDevices.removeEventListener("devicechange", getCameras);
-    };
+    (async () => {
+      const deviceId = await findBestAutoFocusCamera();
+      if (deviceId) {
+        startCamera(deviceId);
+      } else {
+        setInfo('❌ 無法找到可用鏡頭');
+      }
+    })();
+
+    return () => stopStream();
   }, []);
 
   return (
-    <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 智慧相機（自動對焦優先）</h2>
-
+    <div style={{ fontFamily: 'sans-serif', padding: '20px' }}>
+      <h2>📷 自動對焦相機（實驗版）</h2>
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        style={{ width: "100%", maxWidth: "500px", borderRadius: "10px" }}
-      />
-
-      <div style={{ marginTop: "10px" }}>
-        <button onClick={takePhoto}>📸 拍照</button>
-      </div>
-
-      <canvas
-        ref={canvasRef}
         style={{
-          width: "300px",
-          height: "auto",
-          marginTop: "10px",
-          border: "1px solid #ccc",
+          width: '100%',
+          maxWidth: '500px',
+          border: '1px solid #ccc',
+          borderRadius: '8px'
         }}
       />
-
-      <div style={{ marginTop: "20px" }}>
-        <h4>可選鏡頭</h4>
-        <ul>
-          {videoDevices.map((device) => (
-            <li key={device.deviceId}>
-              {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}
-              {device.deviceId === currentDeviceId && (
-                <strong style={{ color: "green" }}> ← 使用中</strong>
-              )}
-              <br />
-              <button onClick={() => startCamera(device.deviceId)}>切換</button>
-            </li>
-          ))}
-        </ul>
+      <div style={{ marginTop: '10px' }}>
+        <button onClick={handleTakePhoto}>📸 拍照</button>
       </div>
+      <canvas
+        ref={photoCanvasRef}
+        style={{
+          marginTop: '10px',
+          width: '240px',
+          height: '180px',
+          border: '1px solid #aaa'
+        }}
+      />
+      <h3>🎛️ 可選相機</h3>
+      <ul>
+        {deviceList.map(device => (
+          <li key={device.deviceId}>
+            {device.label || '未命名相機'}
+            {device.deviceId === selectedDeviceId && (
+              <strong style={{ color: 'green' }}> ← 使用中</strong>
+            )}
+            <br />
+            <button onClick={() => startCamera(device.deviceId)}>切換</button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 };
 
-export default SmartCamera;
+export default AutoFocusCamera;
+
 
 
