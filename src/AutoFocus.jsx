@@ -52,12 +52,19 @@ const AutoFocusCamera = () => {
     }
   };
 
+  const isBackCamera = (label) =>
+    /back|rear|wide|environment|主|後/i.test(label || '');
+
+  const isFrontCamera = (label) =>
+    /front|facetime|self|前/i.test(label || '');
+
   const findBestAutoFocusCamera = async () => {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const videoInputs = devices.filter(d => d.kind === 'videoinput');
-    setDeviceList(videoInputs);
+    const nonFrontCams = videoInputs.filter(d => !isFrontCamera(d.label));
+    setDeviceList(nonFrontCams);
 
-    for (const device of videoInputs) {
+    for (const device of nonFrontCams) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { deviceId: { exact: device.deviceId } }
@@ -65,24 +72,15 @@ const AutoFocusCamera = () => {
         const track = stream.getVideoTracks()[0];
         const caps = track.getCapabilities?.();
         const hasAutoFocus =
-          caps?.focusMode?.includes('continuous') ||
-          caps?.focusMode?.includes('auto');
-
-        // 清掉測試用 stream
+          caps?.focusMode?.includes('continuous') || caps?.focusMode?.includes('auto');
         track.stop();
-
         if (hasAutoFocus) {
           return device.deviceId;
         }
-      } catch (_) {
-        // skip failed devices
-      }
+      } catch (_) { /* skip */ }
     }
 
-    // fallback: 找第一個後鏡頭
-    const fallback = videoInputs.find(d =>
-      /back|rear|wide|environment|主|後/i.test(d.label)
-    );
+    const fallback = nonFrontCams.find(d => isBackCamera(d.label));
     return fallback?.deviceId || videoInputs[0]?.deviceId || null;
   };
 
@@ -95,24 +93,18 @@ const AutoFocusCamera = () => {
         setInfo('❌ 無法找到可用鏡頭');
       }
     })();
-
     return () => stopStream();
   }, []);
 
   return (
     <div style={{ fontFamily: 'sans-serif', padding: '20px' }}>
-      <h2>📷 自動對焦相機（實驗版）</h2>
+      <h2>📷 自動對焦相機（只選後鏡頭）</h2>
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        style={{
-          width: '100%',
-          maxWidth: '500px',
-          border: '1px solid #ccc',
-          borderRadius: '8px'
-        }}
+        style={{ width: '100%', maxWidth: '500px', border: '1px solid #ccc', borderRadius: '8px' }}
       />
       <div style={{ marginTop: '10px' }}>
         <button onClick={handleTakePhoto}>📸 拍照</button>
@@ -126,7 +118,7 @@ const AutoFocusCamera = () => {
           border: '1px solid #aaa'
         }}
       />
-      <h3>🎛️ 可選相機</h3>
+      <h3>🎛️ 可用鏡頭</h3>
       <ul>
         {deviceList.map(device => (
           <li key={device.deviceId}>
@@ -139,6 +131,7 @@ const AutoFocusCamera = () => {
           </li>
         ))}
       </ul>
+      <p>{info}</p>
     </div>
   );
 };
