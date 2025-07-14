@@ -145,5 +145,3 @@ const AutoFocusCamera = () => {
 
 export default AutoFocusCamera;
 
-
-
