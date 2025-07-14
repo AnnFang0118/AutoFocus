@@ -1,173 +1,126 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from "react";
 
-const CameraViewer = () => {
+const CameraAutoFocusChecker = () => {
   const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const [info, setInfo] = useState('載入中...');
+  const [devices, setDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
+  const [imageCapture, setImageCapture] = useState(null);
+  const [error, setError] = useState("");
 
-  const detectDevicePlatform = () => {
-    const ua = navigator.userAgent;
-    if (/android/i.test(ua)) return 'Android';
-    if (/iphone/i.test(ua)) return 'iPhone';
-    if (/ipad/i.test(ua)) return 'iPad';
-    if (/macintosh/i.test(ua)) return 'Mac';
-    if (/windows/i.test(ua)) return 'Windows';
-    if (/linux/i.test(ua)) return 'Linux';
-    return '未知平台';
+  const stopStream = () => {
+    if (videoRef.current?.srcObject) {
+      videoRef.current.srcObject.getTracks().forEach((t) => t.stop());
+      videoRef.current.srcObject = null;
+    }
   };
 
-  const detectBrandFromUserAgent = () => {
-    const ua = navigator.userAgent;
-    if (/SM-|Galaxy|Samsung/i.test(ua)) return 'Samsung';
-    if (/XQ-|SO-|Sony/i.test(ua)) return 'Sony';
-    if (/Pixel/i.test(ua)) return 'Google Pixel';
-    if (/iPhone/i.test(ua)) return 'Apple iPhone';
-    if (/iPad/i.test(ua)) return 'Apple iPad';
-    if (/MI|Redmi|Xiaomi/i.test(ua)) return 'Xiaomi';
-    if (/OnePlus/i.test(ua)) return 'OnePlus';
-    if (/OPPO/i.test(ua)) return 'OPPOㄋ';
-    if (/Vivo/i.test(ua)) return 'Vivo';
-    if (/ASUS|Zenfone/i.test(ua)) return 'ASUS';
-    if (/HUAWEI|HONOR/i.test(ua)) return 'Huawei/Honor';
-    return '未知品牌';
+  const startCamera = async (deviceId) => {
+    stopStream();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId } }
+      });
+
+      const track = stream.getVideoTracks()[0];
+      videoRef.current.srcObject = stream;
+      videoRef.current.play();
+
+      try {
+        const capture = new ImageCapture(track);
+        setImageCapture(capture);
+      } catch (e) {
+        console.warn("ImageCapture 無法建立", e);
+        setImageCapture(null);
+      }
+
+      setSelectedDeviceId(deviceId);
+    } catch (e) {
+      console.error("啟用鏡頭失敗", e);
+      setError("🚫 鏡頭啟用失敗");
+    }
+  };
+
+  const checkAutoFocusSupport = async (device) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: device.deviceId } }
+      });
+      const track = stream.getVideoTracks()[0];
+      const capabilities = track.getCapabilities?.();
+      const hasAutoFocus =
+        capabilities?.focusMode?.includes("continuous") ||
+        capabilities?.focusMode?.includes("auto");
+      track.stop();
+      return { ...device, hasAutoFocus: !!hasAutoFocus };
+    } catch {
+      return { ...device, hasAutoFocus: false };
+    }
+  };
+
+  const getAllCamerasWithAutoFocusInfo = async () => {
+    try {
+      await navigator.mediaDevices.getUserMedia({ video: true }); // 確保權限
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const cameras = all.filter((d) => d.kind === "videoinput");
+
+      const enriched = await Promise.all(
+        cameras.map((device) => checkAutoFocusSupport(device))
+      );
+      setDevices(enriched);
+
+      if (enriched.length > 0) {
+        startCamera(enriched[0].deviceId);
+      }
+    } catch (e) {
+      console.error("列出鏡頭失敗", e);
+      setError("⚠️ 無法取得鏡頭列表");
+    }
   };
 
   useEffect(() => {
-    const gatherInfo = async () => {
-      try {
-        const lines = [];
-
-        // Basic UA
-        lines.push(`🧠 User Agent:\n${navigator.userAgent}\n`);
-        lines.push(`📱 預測平台: ${detectDevicePlatform()}`);
-        lines.push(`🏷️ 預測品牌: ${detectBrandFromUserAgent()}`);
-
-        // UA-CH: 嘗試取得高精度裝置資訊
-        if (navigator.userAgentData?.getHighEntropyValues) {
-          try {
-            const uaDetails = await navigator.userAgentData.getHighEntropyValues([
-              'platform',
-              'platformVersion',
-              'model',
-              'architecture',
-              'bitness',
-              'fullVersionList'
-            ]);
-
-            lines.push(`\n🔍 UA-CH 裝置資訊（高精度）:`);
-            Object.entries(uaDetails).forEach(([key, value]) => {
-              lines.push(`• ${key}: ${value}`);
-            });
-          } catch (err) {
-            lines.push('\n⚠️ 無法取得 UA-CH 裝置資訊（可能未授權）');
-          }
-        } else {
-          lines.push('\n⚠️ 瀏覽器不支援 User-Agent Client Hints (UA-CH)');
-        }
-
-        // 啟用相機並抓取設定
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
-        }
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: 'environment',
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            advanced: [
-              {
-                focusMode: 'manual',
-                focusDistance: 0.1,
-                exposureMode: 'continuous',
-                whiteBalanceMode: 'continuous',
-                zoom: 1.0
-              }
-            ]
-          }
-        });
-        
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(err => {
-            console.error('Error playing video:', err);
-            throw new Error('Failed to start video playback');
-          });
-        }
-
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
-          lines.push('\n🎥 MediaTrack Settings:');
-          const settings = videoTrack.getSettings();
-          Object.entries(settings).forEach(([key, value]) => {
-            lines.push(`• ${key}: ${value}`);
-          });
-
-          if (typeof videoTrack.getCapabilities === 'function') {
-            lines.push('\n📈 MediaTrack Capabilities:');
-            const capabilities = videoTrack.getCapabilities();
-            Object.entries(capabilities).forEach(([key, value]) => {
-              lines.push(`• ${key}: ${JSON.stringify(value)}`);
-            });
-          }
-        }
-
-        // 所有相機裝置
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoInputs = devices.filter(d => d.kind === 'videoinput');
-        lines.push('\n📋 可用相機裝置:');
-        videoInputs.forEach((device, idx) => {
-          lines.push(`相機 ${idx + 1}:`);
-          lines.push(`• label: ${device.label || '(無法取得)'}`);
-          lines.push(`• deviceId: ${device.deviceId}\n`);
-        });
-
-        setInfo(lines.join('\n'));
-      } catch (err) {
-        console.error('Error:', err);
-        setInfo(`❌ 錯誤：${err.message}`);
-      }
-    };
-
-    gatherInfo();
-
-    // 清理函數
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-    };
+    getAllCamerasWithAutoFocusInfo();
+    return stopStream;
   }, []);
 
   return (
-    <div style={{ fontFamily: 'sans-serif', padding: '20px' }}>
-      <h2>📷 相機畫面</h2>
+    <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
+      <h2>📷 鏡頭自動對焦檢查器</h2>
+
+      {error && <p style={{ color: "red" }}>{error}</p>}
+
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        style={{ width: '100%', maxWidth: '500px', border: '1px solid black', borderRadius: '8px' }}
-      />
-      <h2 style={{ marginTop: '20px' }}>📦 裝置詳細資訊</h2>
-      <pre
         style={{
-          whiteSpace: 'pre-wrap',
-          background: '#f5f5f5',
-          padding: '15px',
-          borderRadius: '8px',
-          maxWidth: '500px',
+          width: "100%",
+          maxWidth: "500px",
+          border: "1px solid #ccc",
+          borderRadius: "10px"
         }}
-      >
-        {info}
-      </pre>
+      />
+
+      <h3 style={{ marginTop: "20px" }}>🎛️ 可用鏡頭</h3>
+      <ul>
+        {devices.map((device) => (
+          <li key={device.deviceId} style={{ marginBottom: "10px" }}>
+            <strong>{device.label || "未命名鏡頭"}</strong>
+            {device.hasAutoFocus ? (
+              <span style={{ color: "green" }}> ✅ 支援自動對焦</span>
+            ) : (
+              <span style={{ color: "gray" }}> ⚠️ 不支援自動對焦</span>
+            )}
+            {device.deviceId === selectedDeviceId && (
+              <strong style={{ color: "blue" }}> ← 使用中</strong>
+            )}
+            <br />
+            <button onClick={() => startCamera(device.deviceId)}>切換</button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 };
 
-export default CameraViewer;
+export default CameraAutoFocusChecker;
