@@ -4,9 +4,9 @@ const AutoFocusCamera = () => {
   const videoRef = useRef(null);
   const photoCanvasRef = useRef(null);
   const [imageCapture, setImageCapture] = useState(null);
+  const [info, setInfo] = useState('🔍 檢查中...');
   const [deviceList, setDeviceList] = useState([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState(null);
-  const [info, setInfo] = useState('初始化中...');
 
   const isIPhone = /iPhone/i.test(navigator.userAgent);
 
@@ -63,36 +63,51 @@ const AutoFocusCamera = () => {
     }
   };
 
-  const updateDeviceList = async () => {
+  const findAutoFocusCamera = async () => {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const cameras = devices.filter(d => d.kind === 'videoinput');
+    const cameras = devices.filter(d =>
+      d.kind === 'videoinput' &&
+      !/front|facetime|self/i.test(d.label) &&
+      !/virtual|obs|snap|filter|manycam/i.test(d.label)
+    );
+
     setDeviceList(cameras);
+
+    for (const device of cameras) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: device.deviceId } }
+        });
+        const track = stream.getVideoTracks()[0];
+        const caps = track.getCapabilities?.();
+        const hasAF = caps?.focusMode?.includes('continuous') || caps?.focusMode?.includes('auto');
+        track.stop();
+        if (hasAF) return device.deviceId;
+      } catch { }
+    }
+
+    const fallback = cameras.find(d => /back|rear|wide|主|後|environment/i.test(d.label));
+    return fallback?.deviceId || cameras[0]?.deviceId || null;
   };
 
   useEffect(() => {
     (async () => {
-      try {
-        // 1. 初次啟動時先開啟預設後鏡頭（iPhone 上必要）
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' }
-        });
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-
-        // 2. 擷取裝置資訊（才能正確列出 label）
-        await updateDeviceList();
-
-        // 3. 選擇第一個後鏡頭並重啟（選擇支援 autofocus 的）
-        const backCams = deviceList.filter(d =>
-          /back|rear|wide|主|後|environment/i.test(d.label)
-        );
-        const targetDevice = backCams[0] || deviceList[0];
-        if (targetDevice?.deviceId) await startCamera(targetDevice.deviceId);
-        else setInfo('⚠️ 無可用鏡頭');
-
-      } catch (err) {
-        console.error('初始化錯誤:', err);
-        setInfo('❌ 初始化失敗');
+      setInfo('📦 初始化中...');
+      if (isIPhone) {
+        setInfo('🍎 iPhone：使用後鏡頭');
+        await startCamera('facingMode:environment');
+      } else {
+        const best = await findAutoFocusCamera();
+        if (best) {
+          setInfo('✅ 使用支援自動對焦鏡頭');
+          await startCamera(best);
+        } else {
+          setInfo('⚠️ 找不到支援自動對焦的鏡頭，使用第一顆');
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const fallback = devices.find(d => d.kind === 'videoinput');
+          if (fallback) await startCamera(fallback.deviceId);
+          else setInfo('❌ 沒有可用鏡頭');
+        }
       }
     })();
 
@@ -101,7 +116,7 @@ const AutoFocusCamera = () => {
 
   return (
     <div style={{ fontFamily: 'sans-serif', padding: 20 }}>
-      <h2>📷 自動對焦相機（支援 iPhone 切換鏡頭）</h2>
+      <h2>📷 自動對焦相機（跨平台）</h2>
       <video
         ref={videoRef}
         autoPlay
@@ -125,20 +140,23 @@ const AutoFocusCamera = () => {
         }}
       />
       <p style={{ marginTop: 20, color: '#555' }}>{info}</p>
-
-      <h3>🎛️ 可選鏡頭</h3>
-      <ul>
-        {deviceList.map(d => (
-          <li key={d.deviceId}>
-            {d.label || '未命名相機'}
-            {d.deviceId === selectedDeviceId && (
-              <strong style={{ color: 'green' }}> ← 使用中</strong>
-            )}
-            <br />
-            <button onClick={() => startCamera(d.deviceId)}>切換</button>
-          </li>
-        ))}
-      </ul>
+      {!isIPhone && deviceList.length > 1 && (
+        <>
+          <h3>🔁 可用鏡頭</h3>
+          <ul>
+            {deviceList.map(d => (
+              <li key={d.deviceId}>
+                {d.label || '未命名鏡頭'}
+                {d.deviceId === selectedDeviceId && (
+                  <strong style={{ color: 'green' }}> ← 使用中</strong>
+                )}
+                <br />
+                <button onClick={() => startCamera(d.deviceId)}>切換</button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 };
