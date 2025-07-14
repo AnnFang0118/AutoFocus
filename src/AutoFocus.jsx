@@ -8,53 +8,58 @@ const SmartCamera = () => {
   const [videoDevices, setVideoDevices] = useState([]);
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
   const [imageCapture, setImageCapture] = useState(null);
-  const [mode, setMode] = useState("init");
+  const [error, setError] = useState(null);
 
   const isVirtual = (label = "") => /virtual|obs|snap|manycam/i.test(label);
   const isFront = (label = "") => /front|前置|facetime|self/i.test(label);
 
+  const stopCurrentStream = () => {
+    const stream = videoRef.current?.srcObject;
+    if (stream && stream.getTracks) {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+  };
+
   const drawImage = (bitmap) => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
-    const { width, height } = bitmap;
-
-    canvas.width = width;
-    canvas.height = height;
-    ctx.drawImage(bitmap, 0, 0, width, height);
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    ctx.drawImage(bitmap, 0, 0);
   };
 
   const takePhoto = async () => {
     if (!imageCapture) return;
-
-    if (!isIOS && imageCapture.takePhoto) {
-      try {
+    try {
+      if (!isIOS && imageCapture.takePhoto) {
         const blob = await imageCapture.takePhoto();
         const bitmap = await createImageBitmap(blob);
         drawImage(bitmap);
-      } catch (err) {
-        console.warn("takePhoto 失敗，改用 grabFrame", err);
-        grabFrameFallback();
+      } else {
+        const bitmap = await imageCapture.grabFrame();
+        drawImage(bitmap);
       }
-    } else {
-      grabFrameFallback();
-    }
-  };
-
-  const grabFrameFallback = async () => {
-    if (!imageCapture || !imageCapture.grabFrame) return;
-    try {
-      const bitmap = await imageCapture.grabFrame();
-      drawImage(bitmap);
     } catch (err) {
-      console.error("grabFrame 失敗", err);
+      console.warn("拍照失敗，使用 grabFrame 備案", err);
+      try {
+        const bitmap = await imageCapture.grabFrame();
+        drawImage(bitmap);
+      } catch (e) {
+        console.error("grabFrame 也失敗", e);
+      }
     }
   };
 
   const startCamera = async (deviceId = null) => {
+    stopCurrentStream(); // 🛑 停止先前相機
+    setImageCapture(null);
+    setError(null);
+
     const constraints = {
-      video: deviceId
-        ? { deviceId: { exact: deviceId } }
-        : { facingMode: { exact: "environment" } },
+      video: {
+        deviceId: deviceId ? { exact: deviceId } : undefined,
+        facingMode: !deviceId ? { exact: "environment" } : undefined,
+      },
     };
 
     try {
@@ -62,12 +67,10 @@ const SmartCamera = () => {
       const track = stream.getVideoTracks()[0];
       const settings = track.getSettings();
       setCurrentDeviceId(settings.deviceId);
-
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
 
-      // 嘗試初始化 ImageCapture
       try {
         const capture = new ImageCapture(track);
         setImageCapture(capture);
@@ -75,19 +78,26 @@ const SmartCamera = () => {
         console.warn("ImageCapture 初始化失敗", err);
       }
     } catch (err) {
-      console.error("無法啟用相機", err);
+      console.error("相機啟用失敗", err);
+      setError("無法啟動相機，請確認權限與裝置可用性。");
     }
   };
 
   const getCameras = async () => {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const cameras = devices.filter(
-      (d) => d.kind === "videoinput" && !isVirtual(d.label) && !isFront(d.label)
-    );
-    setVideoDevices(cameras);
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter(
+        (d) => d.kind === "videoinput" && !isVirtual(d.label)
+      );
+      setVideoDevices(cameras);
 
-    if (cameras.length > 0) {
-      startCamera(cameras[0].deviceId);
+      // 預設啟用第一支非前鏡頭
+      const preferred = cameras.find((d) => !isFront(d.label)) || cameras[0];
+      if (preferred) {
+        startCamera(preferred.deviceId);
+      }
+    } catch (err) {
+      console.error("取得鏡頭清單失敗", err);
     }
   };
 
@@ -96,12 +106,15 @@ const SmartCamera = () => {
     navigator.mediaDevices.addEventListener("devicechange", getCameras);
     return () => {
       navigator.mediaDevices.removeEventListener("devicechange", getCameras);
+      stopCurrentStream();
     };
   }, []);
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 智慧相機（自動對焦優先）</h2>
+      <h2>📷 智慧相機（多鏡頭支援）</h2>
+
+      {error && <div style={{ color: "red" }}>⚠️ {error}</div>}
 
       <video
         ref={videoRef}
@@ -126,7 +139,7 @@ const SmartCamera = () => {
       />
 
       <div style={{ marginTop: "20px" }}>
-        <h4>可選鏡頭</h4>
+        <h4>可用鏡頭</h4>
         <ul>
           {videoDevices.map((device) => (
             <li key={device.deviceId}>
@@ -135,7 +148,9 @@ const SmartCamera = () => {
                 <strong style={{ color: "green" }}> ← 使用中</strong>
               )}
               <br />
-              <button onClick={() => startCamera(device.deviceId)}>切換</button>
+              <button onClick={() => startCamera(device.deviceId)}>
+                切換到此鏡頭
+              </button>
             </li>
           ))}
         </ul>
