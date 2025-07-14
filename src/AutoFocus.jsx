@@ -1,153 +1,123 @@
-import React, { useEffect, useState, useRef } from 'react';
 
-const isIPhone = /iPhone/i.test(navigator.userAgent);
+import React, { useEffect, useRef, useState } from "react";
 
-const CameraAutoFocusChecker = () => {
+const AutoSelectCamera = () => {
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
+  const photoCanvasRef = useRef(null);
   const [devices, setDevices] = useState([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
+  const [currentDeviceId, setCurrentDeviceId] = useState(null);
   const [imageCapture, setImageCapture] = useState(null);
-  const [error, setError] = useState('');
+  const [message, setMessage] = useState("");
 
-  const stopCurrentStream = () => {
-    if (videoRef.current?.srcObject) {
-      videoRef.current.srcObject.getTracks().forEach(track => track.stop());
-      videoRef.current.srcObject = null;
+  const isVirtualCamera = (label) => /virtual|obs|snap|filter|manycam/i.test(label);
+  const isFrontCamera = (label) => /front|前置|facetime|self/i.test(label);
+
+  const getCapabilitiesForDevice = async (deviceId) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+      const track = stream.getVideoTracks()[0];
+      const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+      track.stop();
+      return capabilities;
+    } catch (err) {
+      return null;
     }
+  };
+
+  const isGoodCamera = (capabilities, label = "") => {
+    if (!capabilities) return false;
+    const hasFocus = capabilities?.focusMode?.includes("continuous");
+    const isNotUltraWide = !/ultra|超廣角/i.test(label);
+    const goodResolution = capabilities?.width?.max >= 1920;
+    return hasFocus && isNotUltraWide && goodResolution;
   };
 
   const startCamera = async (deviceId) => {
-    stopCurrentStream();
     try {
-      const constraints = isIPhone
-        ? { video: { facingMode: { exact: 'environment' } } }
-        : { video: { deviceId: { exact: deviceId } } };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      videoRef.current.srcObject = stream;
-      videoRef.current.play();
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      setCurrentDeviceId(deviceId);
 
       const track = stream.getVideoTracks()[0];
-      const capture = new ImageCapture(track);
-      setImageCapture(capture);
-      setSelectedDeviceId(deviceId);
-    } catch (err) {
-      console.error('啟動鏡頭失敗:', err);
-      setError('無法啟動鏡頭');
-    }
-  };
-
-  const takePhoto = async () => {
-    if (!imageCapture) return;
-    try {
-      const blob = await imageCapture.takePhoto();
-      const bitmap = await createImageBitmap(blob);
-      const canvas = canvasRef.current;
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(bitmap, 0, 0);
-    } catch (err) {
-      console.error('拍照失敗:', err);
-    }
-  };
-
-  const fetchDevicesAndCapabilities = async () => {
-    try {
-      await navigator.mediaDevices.getUserMedia({ video: true }); // 先要授權才能讀 label
-
-      const allDevices = await navigator.mediaDevices.enumerateDevices();
-      const videoDevices = allDevices.filter(d => d.kind === 'videoinput');
-
-      const enriched = await Promise.all(videoDevices.map(async (device) => {
-        if (isIPhone) {
-          return {
-            deviceId: device.deviceId,
-            label: device.label || '未命名相機',
-            hasAutoFocus: null
-          };
-        }
-
+      if ("ImageCapture" in window) {
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId: { exact: device.deviceId } }
-          });
-          const track = stream.getVideoTracks()[0];
-          const capture = new ImageCapture(track);
-          const capabilities = await capture.getPhotoCapabilities();
-          const modes = capabilities.focusMode || [];
-          const hasAutoFocus = modes.includes('continuous') || modes.includes('auto') || modes.includes('single-shot');
-          track.stop();
-
-          return {
-            deviceId: device.deviceId,
-            label: device.label || '未命名相機',
-            hasAutoFocus
-          };
+          setImageCapture(new ImageCapture(track));
         } catch (e) {
-          return {
-            deviceId: device.deviceId,
-            label: device.label || '未命名相機',
-            hasAutoFocus: false
-          };
+          console.warn("ImageCapture init error", e);
         }
-      }));
-
-      setDevices(enriched);
+      }
     } catch (err) {
-      console.error('取得鏡頭清單失敗:', err);
-      setError('無法取得鏡頭裝置清單');
+      setMessage("🚫 無法啟用相機：" + err.message);
     }
   };
 
   useEffect(() => {
-    fetchDevicesAndCapabilities();
-    return stopCurrentStream;
+    const initialize = async () => {
+      const allDevices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = allDevices.filter(
+        (d) => d.kind === "videoinput" && !isVirtualCamera(d.label) && !isFrontCamera(d.label)
+      );
+      setDevices(videoInputs);
+
+      for (let device of videoInputs) {
+        const capabilities = await getCapabilitiesForDevice(device.deviceId);
+        if (isGoodCamera(capabilities, device.label)) {
+          startCamera(device.deviceId);
+          return;
+        }
+      }
+
+      if (videoInputs.length > 0) {
+        setMessage("⚠️ 沒有找到理想相機，啟用第一個可用相機");
+        startCamera(videoInputs[0].deviceId);
+      } else {
+        setMessage("❌ 找不到可用的後鏡頭");
+      }
+    };
+
+    initialize();
   }, []);
 
+  const drawCanvas = (canvas, img) => {
+    const canvasWidth = canvas.clientWidth;
+    const canvasHeight = canvas.clientHeight;
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    const ratio = Math.min(canvasWidth / img.width, canvasHeight / img.height);
+    const x = (canvasWidth - img.width * ratio) / 2;
+    const y = (canvasHeight - img.height * ratio) / 2;
+    ctx.drawImage(img, 0, 0, img.width, img.height, x, y, img.width * ratio, img.height * ratio);
+  };
+
+  const onTakePhoto = () => {
+    if (imageCapture) {
+      imageCapture
+        .takePhoto()
+        .then((blob) => createImageBitmap(blob))
+        .then((imageBitmap) => {
+          if (photoCanvasRef.current) {
+            drawCanvas(photoCanvasRef.current, imageBitmap);
+          }
+        })
+        .catch((err) => setMessage("📸 拍照失敗：" + err.message));
+    } else {
+      setMessage("⚠️ ImageCapture 尚未就緒");
+    }
+  };
+
   return (
-    <div style={{ fontFamily: 'sans-serif', padding: 20 }}>
-      <h2>📷 身分證拍攝系統</h2>
-
-      {error && <p style={{ color: 'red' }}>{error}</p>}
-
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        style={{ width: '100%', maxWidth: 500, border: '1px solid #ccc', borderRadius: 8 }}
-      />
-
-      <div style={{ marginTop: 10 }}>
-        <button onClick={takePhoto}>📸 拍照</button>
+    <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
+      <h2>📷 自動選擇最佳後鏡頭</h2>
+      <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", maxWidth: "500px", border: "1px solid #ccc", borderRadius: "8px" }} />
+      <div style={{ marginTop: "10px" }}>
+        <button onClick={onTakePhoto}>📸 拍照</button>
       </div>
-
-      <canvas
-        ref={canvasRef}
-        style={{ marginTop: 10, width: 300, height: 200, border: '1px solid #aaa' }}
-      />
-
-      <h3>🎛️ 鏡頭列表</h3>
-      <ul>
-        {devices.map(device => (
-          <li key={device.deviceId}>
-            <strong>{device.label}</strong>{' '}
-            {device.hasAutoFocus === true && <span style={{ color: 'green' }}>✅ 自動對焦</span>}
-            {device.hasAutoFocus === false && <span style={{ color: 'gray' }}>❌ 無自動對焦</span>}
-            {device.hasAutoFocus === null && <span style={{ color: 'gray' }}>📱 無法偵測 (iPhone)</span>}
-            <br />
-            {!isIPhone && (
-              <button onClick={() => startCamera(device.deviceId)}>
-                {selectedDeviceId === device.deviceId ? '✔️ 使用中' : '切換'}
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
+      <canvas ref={photoCanvasRef} style={{ width: "240px", height: "180px", marginTop: "10px", border: "1px solid #ccc" }} />
+      <p style={{ color: "red", marginTop: "10px" }}>{message}</p>
     </div>
   );
 };
 
-export default CameraAutoFocusChecker;
+export default AutoSelectCamera;
