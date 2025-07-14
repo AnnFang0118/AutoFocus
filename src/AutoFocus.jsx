@@ -9,6 +9,7 @@ const SmartCamera = () => {
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
   const [imageCapture, setImageCapture] = useState(null);
   const [focusSupportMap, setFocusSupportMap] = useState({});
+  const [focusControl, setFocusControl] = useState(null);
 
   const isVirtual = (label = "") => /virtual|obs|snap|manycam/i.test(label);
   const isFront = (label = "") => /front|前置|facetime|self/i.test(label);
@@ -50,22 +51,34 @@ const SmartCamera = () => {
     }
   };
 
-  const checkAutoFocusSupport = async (track, deviceId) => {
+  const checkFocusSupport = async (track, deviceId) => {
     try {
-      const capabilities = track.getCapabilities?.();
-      const focusModes = capabilities?.focusMode || [];
+      const capabilities = track.getCapabilities?.() || {};
+      const focusModes = capabilities.focusMode || [];
+      const hasAuto = focusModes.includes("auto");
+
       setFocusSupportMap((prev) => ({
         ...prev,
-        [deviceId]: focusModes.includes("auto"),
+        [deviceId]: hasAuto,
       }));
+
+      if (capabilities.focusDistance) {
+        const { min, max, step } = capabilities.focusDistance;
+        const current = track.getSettings().focusDistance || min;
+        setFocusControl({ min, max, step, current });
+      } else {
+        setFocusControl(null);
+      }
     } catch (err) {
-      console.warn(`無法偵測 ${deviceId} 自動對焦支援狀態`, err);
+      console.warn("偵測對焦能力失敗", err);
+      setFocusControl(null);
     }
   };
 
   const startCamera = async (deviceId = null) => {
     stopCurrentStream();
     setImageCapture(null);
+    setFocusControl(null);
 
     const constraints = {
       video: {
@@ -88,7 +101,7 @@ const SmartCamera = () => {
         console.warn("ImageCapture 初始化失敗", err);
       }
 
-      checkAutoFocusSupport(track, settings.deviceId);
+      checkFocusSupport(track, settings.deviceId);
     } catch (err) {
       console.error("相機啟用失敗", err);
     }
@@ -122,7 +135,7 @@ const SmartCamera = () => {
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 智慧相機（後鏡頭、自動對焦判斷）</h2>
+      <h2>📷 智慧相機（後鏡頭 + 自動／手動對焦）</h2>
 
       <video
         ref={videoRef}
@@ -136,6 +149,33 @@ const SmartCamera = () => {
         <button onClick={takePhoto}>📸 拍照</button>
       </div>
 
+      {focusControl && (
+        <div style={{ marginTop: "10px" }}>
+          <label>🔧 手動焦距：</label>
+          <input
+            type="range"
+            min={focusControl.min}
+            max={focusControl.max}
+            step={focusControl.step}
+            value={focusControl.current}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              setFocusControl((prev) => ({ ...prev, current: val }));
+              const stream = videoRef.current?.srcObject;
+              const track = stream?.getVideoTracks()[0];
+              if (track?.applyConstraints) {
+                track
+                  .applyConstraints({ advanced: [{ focusDistance: val }] })
+                  .catch((err) => {
+                    console.warn("套用手動對焦失敗", err);
+                  });
+              }
+            }}
+          />
+          <span> {focusControl.current}</span>
+        </div>
+      )}
+
       <canvas
         ref={canvasRef}
         style={{
@@ -147,7 +187,7 @@ const SmartCamera = () => {
       />
 
       <div style={{ marginTop: "20px" }}>
-        <h4>可用鏡頭（已排除前置鏡頭）</h4>
+        <h4>可用鏡頭（排除前鏡頭）</h4>
         <ul>
           {videoDevices.map((device) => {
             const supportsAutoFocus = focusSupportMap[device.deviceId];
@@ -158,7 +198,7 @@ const SmartCamera = () => {
                   <strong style={{ color: "green" }}> ← 使用中</strong>
                 )}
                 <div>
-                  🔍 自動對焦支援：{" "}
+                  🔍 自動對焦：{" "}
                   {supportsAutoFocus === undefined
                     ? "偵測中..."
                     : supportsAutoFocus
