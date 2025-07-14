@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 
+const isIOS = /iPhone|iPad/i.test(navigator.userAgent);
+
 const CameraAutoFocusChecker = () => {
   const videoRef = useRef(null);
   const [devices, setDevices] = useState([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState(null);
-  const [imageCapture, setImageCapture] = useState(null);
   const [error, setError] = useState("");
 
   const stopStream = () => {
@@ -22,23 +23,19 @@ const CameraAutoFocusChecker = () => {
       });
 
       const track = stream.getVideoTracks()[0];
+      const settings = track.getSettings();
       videoRef.current.srcObject = stream;
-      videoRef.current.play();
+      await videoRef.current.play();
 
-      try {
-        const capture = new ImageCapture(track);
-        setImageCapture(capture);
-      } catch (e) {
-        console.warn("ImageCapture 無法建立", e);
-        setImageCapture(null);
-      }
-
-      setSelectedDeviceId(deviceId);
+      setSelectedDeviceId(settings.deviceId);
     } catch (e) {
       console.error("啟用鏡頭失敗", e);
       setError("🚫 鏡頭啟用失敗");
     }
   };
+
+  const isBackCamera = (label = "") =>
+    /back|rear|environment|主|廣角|wide|後/i.test(label);
 
   const checkAutoFocusSupport = async (device) => {
     try {
@@ -57,19 +54,25 @@ const CameraAutoFocusChecker = () => {
     }
   };
 
-  const getAllCamerasWithAutoFocusInfo = async () => {
+  const getBackCameras = async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ video: true }); // 確保權限
+      await navigator.mediaDevices.getUserMedia({ video: true });
+
       const all = await navigator.mediaDevices.enumerateDevices();
-      const cameras = all.filter((d) => d.kind === "videoinput");
+      const cameras = all.filter(
+        (d) => d.kind === "videoinput" && isBackCamera(d.label)
+      );
 
       const enriched = await Promise.all(
         cameras.map((device) => checkAutoFocusSupport(device))
       );
+
       setDevices(enriched);
 
       if (enriched.length > 0) {
-        startCamera(enriched[0].deviceId);
+        await startCamera(enriched[0].deviceId);
+      } else {
+        setError("⚠️ 沒有找到後鏡頭");
       }
     } catch (e) {
       console.error("列出鏡頭失敗", e);
@@ -78,13 +81,13 @@ const CameraAutoFocusChecker = () => {
   };
 
   useEffect(() => {
-    getAllCamerasWithAutoFocusInfo();
+    getBackCameras();
     return stopStream;
   }, []);
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 鏡頭自動對焦檢查器</h2>
+      <h2>📷 後鏡頭對焦檢查</h2>
 
       {error && <p style={{ color: "red" }}>{error}</p>}
 
@@ -101,7 +104,7 @@ const CameraAutoFocusChecker = () => {
         }}
       />
 
-      <h3 style={{ marginTop: "20px" }}>🎛️ 可用鏡頭</h3>
+      <h3 style={{ marginTop: "20px" }}>🎛️ 可用後鏡頭</h3>
       <ul>
         {devices.map((device) => (
           <li key={device.deviceId} style={{ marginBottom: "10px" }}>
@@ -109,7 +112,7 @@ const CameraAutoFocusChecker = () => {
             {device.hasAutoFocus ? (
               <span style={{ color: "green" }}> ✅ 支援自動對焦</span>
             ) : (
-              <span style={{ color: "gray" }}> ⚠️ 不支援自動對焦</span>
+              <span style={{ color: "gray" }}> ⚠️ 無自動對焦</span>
             )}
             {device.deviceId === selectedDeviceId && (
               <strong style={{ color: "blue" }}> ← 使用中</strong>
