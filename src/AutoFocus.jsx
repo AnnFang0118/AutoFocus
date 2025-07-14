@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
 const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+const isFrontCamera = (label = "") => /front|facetime|self|前/i.test(label);
+const isVirtualCamera = (label = "") => /virtual|obs|snap|filter/i.test(label);
 
-const isFrontCamera = (label = "") =>
-  /front|facetime|self|前/i.test(label);
-
-const AutoCameraSimple = () => {
+const AutoCameraSelectable = () => {
   const videoRef = useRef(null);
-  const [deviceList, setDeviceList] = useState([]);
+  const [devices, setDevices] = useState([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState(null);
   const [error, setError] = useState("");
 
@@ -19,16 +18,18 @@ const AutoCameraSimple = () => {
     }
   };
 
-  const getAllDevices = async () => {
+  const getValidDevices = async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ video: true });
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      return devices.filter(
-        (d) => d.kind === "videoinput" && !isFrontCamera(d.label)
+      await navigator.mediaDevices.getUserMedia({ video: true }); // for permission
+      const all = await navigator.mediaDevices.enumerateDevices();
+      return all.filter(
+        (d) =>
+          d.kind === "videoinput" &&
+          !isFrontCamera(d.label) &&
+          !isVirtualCamera(d.label)
       );
     } catch (err) {
-      console.error("getDevices error:", err);
-      setError("🚫 無法取得鏡頭列表");
+      setError("🚫 無法取得相機清單，請確認權限或瀏覽器支援性");
       return [];
     }
   };
@@ -47,11 +48,13 @@ const AutoCameraSimple = () => {
     }
   };
 
-  const pickBestCamera = async (devices) => {
-    for (const d of devices) {
-      if (await hasAutoFocus(d.deviceId)) return d.deviceId;
+  const selectAutoFocusCamera = async (deviceList) => {
+    for (const d of deviceList) {
+      if (await hasAutoFocus(d.deviceId)) {
+        return d.deviceId;
+      }
     }
-    return devices[0]?.deviceId || null;
+    return deviceList[0]?.deviceId || null;
   };
 
   const startCamera = async (deviceId = null) => {
@@ -66,43 +69,56 @@ const AutoCameraSimple = () => {
       setSelectedDeviceId(deviceId);
     } catch (err) {
       console.error("startCamera error:", err);
-      setError("🚫 相機啟用失敗");
+      setError("🚫 無法啟用相機，可能未授權或不支援");
     }
   };
 
   useEffect(() => {
     (async () => {
-      const allDevices = await getAllDevices();
-      setDeviceList(allDevices);
+      const deviceList = await getValidDevices();
+      setDevices(deviceList);
 
-      const bestId = isIOS
-        ? null
-        : await pickBestCamera(allDevices);
-
-      await startCamera(bestId);
+      if (isIOS) {
+        await startCamera(); // iOS 使用 facingMode
+      } else {
+        const preferredId = await selectAutoFocusCamera(deviceList);
+        if (preferredId) await startCamera(preferredId);
+      }
     })();
 
     return () => stopStream();
   }, []);
 
   return (
-    <div style={{ padding: "20px", fontFamily: "sans-serif" }}>
-      <h2>📷 相機預覽（排除前置）</h2>
+    <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
+      <h2>📷 自動對焦相機（可手動切換）</h2>
       {error && <p style={{ color: "red" }}>{error}</p>}
+
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        style={{ width: "100%", maxWidth: "480px", border: "1px solid #ccc" }}
+        style={{
+          width: "100%",
+          maxWidth: "480px",
+          border: "1px solid #ccc",
+          borderRadius: "8px",
+        }}
       />
-      <h3 style={{ marginTop: "20px" }}>🎛️ 可用後鏡頭</h3>
+
+      <h3 style={{ marginTop: "20px" }}>🎛️ 可用鏡頭（不含前鏡頭）</h3>
       <ul>
-        {deviceList.map((d) => (
+        {devices.map((d) => (
           <li key={d.deviceId}>
             {d.label || "未命名鏡頭"}
             {d.deviceId === selectedDeviceId && (
               <strong style={{ color: "green" }}> ← 使用中</strong>
+            )}
+            {!isIOS && (
+              <div>
+                <button onClick={() => startCamera(d.deviceId)}>切換到這顆</button>
+              </div>
             )}
           </li>
         ))}
@@ -111,6 +127,7 @@ const AutoCameraSimple = () => {
   );
 };
 
-export default AutoCameraSimple;
+export default AutoCameraSelectable;
+
 
 
