@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 
 const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
+const isFrontCamera = (label = "") =>
+  /front|facetime|self|前/i.test(label);
+
 const AutoCameraSimple = () => {
   const videoRef = useRef(null);
   const [deviceList, setDeviceList] = useState([]);
@@ -20,10 +23,12 @@ const AutoCameraSimple = () => {
     try {
       await navigator.mediaDevices.getUserMedia({ video: true });
       const devices = await navigator.mediaDevices.enumerateDevices();
-      return devices.filter((d) => d.kind === "videoinput");
+      return devices.filter(
+        (d) => d.kind === "videoinput" && !isFrontCamera(d.label)
+      );
     } catch (err) {
       console.error("getDevices error:", err);
-      setError("🚫 取得鏡頭清單失敗");
+      setError("🚫 無法取得鏡頭列表");
       return [];
     }
   };
@@ -43,8 +48,8 @@ const AutoCameraSimple = () => {
   };
 
   const pickBestCamera = async (devices) => {
-    for (const device of devices) {
-      if (await hasAutoFocus(device.deviceId)) return device.deviceId;
+    for (const d of devices) {
+      if (await hasAutoFocus(d.deviceId)) return d.deviceId;
     }
     return devices[0]?.deviceId || null;
   };
@@ -82,7 +87,7 @@ const AutoCameraSimple = () => {
 
   return (
     <div style={{ padding: "20px", fontFamily: "sans-serif" }}>
-      <h2>📷 相機預覽</h2>
+      <h2>📷 相機預覽（排除前置）</h2>
       {error && <p style={{ color: "red" }}>{error}</p>}
       <video
         ref={videoRef}
@@ -91,7 +96,7 @@ const AutoCameraSimple = () => {
         muted
         style={{ width: "100%", maxWidth: "480px", border: "1px solid #ccc" }}
       />
-      <h3 style={{ marginTop: "20px" }}>🎛️ 所有相機裝置</h3>
+      <h3 style={{ marginTop: "20px" }}>🎛️ 可用後鏡頭</h3>
       <ul>
         {deviceList.map((d) => (
           <li key={d.deviceId}>
@@ -107,4 +112,5 @@ const AutoCameraSimple = () => {
 };
 
 export default AutoCameraSimple;
+
 
