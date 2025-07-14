@@ -54,39 +54,52 @@ const AutoFocusCamera = () => {
     }
   };
 
-  const findBestAutoFocusCamera = async () => {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const videoInputs = devices.filter(d => d.kind === 'videoinput');
-    const backCameras = videoInputs.filter(d => /back|rear|environment|廣角|主|後/i.test(d.label));
-    setDeviceList(backCameras);
+  const updateDeviceListWithFocus = async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter(d => d.kind === 'videoinput');
 
-    for (const device of backCameras) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: device.deviceId } }
-        });
-        const track = stream.getVideoTracks()[0];
-        const caps = track.getCapabilities?.();
-        const hasAutoFocus = caps?.focusMode?.includes('continuous') || caps?.focusMode?.includes('auto');
-        track.stop();
-        if (hasAutoFocus) return device.deviceId;
-      } catch (_) {}
+      const enrichedDevices = await Promise.all(videoInputs.map(async (device) => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: { exact: device.deviceId } }
+          });
+          const track = stream.getVideoTracks()[0];
+          const caps = track.getCapabilities?.();
+          const hasAutoFocus = caps?.focusMode?.includes('continuous') || caps?.focusMode?.includes('auto');
+          track.stop();
+          return {
+            deviceId: device.deviceId,
+            label: device.label || '未命名相機',
+            hasAutoFocus
+          };
+        } catch (_) {
+          return {
+            deviceId: device.deviceId,
+            label: device.label || '未命名相機',
+            hasAutoFocus: false
+          };
+        }
+      }));
+
+      setDeviceList(enrichedDevices);
+      return enrichedDevices;
+    } catch (err) {
+      console.error('列出相機錯誤：', err);
+      setError('⚠️ 無法取得鏡頭清單');
+      return [];
     }
-
-    return backCameras[0]?.deviceId || videoInputs[0]?.deviceId || null;
   };
 
   useEffect(() => {
     (async () => {
+      let devices = [];
       if (isIPhone) {
-        await startCamera(); // iPhone: use facingMode only
+        await startCamera(); // iPhone: 使用環境鏡頭
       } else {
-        const bestId = await findBestAutoFocusCamera();
-        if (bestId) {
-          await startCamera(bestId);
-        } else {
-          setError('⚠️ 找不到後鏡頭');
-        }
+        devices = await updateDeviceListWithFocus();
+        const preferred = devices.find(d => d.hasAutoFocus);
+        await startCamera(preferred?.deviceId || devices[0]?.deviceId);
       }
     })();
 
@@ -129,10 +142,12 @@ const AutoFocusCamera = () => {
           <h3>🎛️ 可選相機</h3>
           <ul>
             {deviceList.map(device => (
-              <li key={device.deviceId}>
-                {device.label || '未命名相機'}
+              <li key={device.deviceId} style={{ marginBottom: '10px' }}>
+                <strong>{device.label}</strong>
+                {device.hasAutoFocus && <span style={{ color: 'green' }}> ✅ 自動對焦</span>}
+                {!device.hasAutoFocus && <span style={{ color: 'gray' }}> ⚠️ 無自動對焦</span>}
                 {device.deviceId === selectedDeviceId && (
-                  <strong style={{ color: 'green' }}> ← 使用中</strong>
+                  <strong style={{ color: 'blue' }}> ← 使用中</strong>
                 )}
                 <br />
                 <button onClick={() => startCamera(device.deviceId)}>切換</button>
@@ -146,6 +161,7 @@ const AutoFocusCamera = () => {
 };
 
 export default AutoFocusCamera;
+
 
 
 
