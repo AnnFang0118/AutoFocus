@@ -1,18 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-const isIPhone = /iPhone/i.test(navigator.userAgent);
+const isIPhone = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+const isFrontCamera = (label = '') => /front|facetime|self|前/i.test(label);
+const isVirtualCamera = (label = '') => /virtual|obs|snap|filter/i.test(label);
 
-const AutoFocusCamera = () => {
+const AutoFocusRearCameraOnly = () => {
   const videoRef = useRef(null);
-  const photoCanvasRef = useRef(null);
+  const canvasRef = useRef(null);
   const [imageCapture, setImageCapture] = useState(null);
-  const [deviceList, setDeviceList] = useState([]);
+  const [devices, setDevices] = useState([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState(null);
   const [error, setError] = useState('');
 
   const stopStream = () => {
     if (videoRef.current?.srcObject) {
-      videoRef.current.srcObject.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject.getTracks().forEach((track) => track.stop());
       videoRef.current.srcObject = null;
     }
   };
@@ -29,47 +31,19 @@ const AutoFocusCamera = () => {
     imageCapture.takePhoto()
       .then(blob => createImageBitmap(blob))
       .then(bitmap => {
-        if (photoCanvasRef.current) drawToCanvas(photoCanvasRef.current, bitmap);
+        if (canvasRef.current) drawToCanvas(canvasRef.current, bitmap);
       })
       .catch(err => console.error('Take photo error:', err));
   };
 
-  const startCamera = async (deviceId = null) => {
+  const getValidRearDevices = async () => {
     try {
-      stopStream();
-      const constraints = isIPhone
-        ? { video: { facingMode: { exact: 'environment' } } }
-        : { video: { deviceId: { exact: deviceId } } };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      const track = stream.getVideoTracks()[0];
-      const capture = new ImageCapture(track);
-      videoRef.current.srcObject = stream;
-      videoRef.current.play();
-      setImageCapture(capture);
-      setSelectedDeviceId(deviceId);
-    } catch (err) {
-      console.error('Start camera failed:', err);
-      setError('🚫 無法啟用鏡頭，可能未授權或不支援。');
-    }
-  };
-
-  const updateDeviceListWithFocus = async () => {
-    try {
-      // 🔓 必須先取得權限，iPhone 才能拿到 label
       await navigator.mediaDevices.getUserMedia({ video: true });
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = all.filter(d => d.kind === 'videoinput');
 
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const videoInputs = devices.filter(d => d.kind === 'videoinput');
-
-      const enrichedDevices = await Promise.all(videoInputs.map(async (device) => {
-        if (isIPhone) {
-          return {
-            deviceId: device.deviceId,
-            label: device.label || '未命名相機',
-            hasAutoFocus: null,
-          };
-        }
+      const valid = await Promise.all(videoInputs.map(async (device) => {
+        if (isFrontCamera(device.label) || isVirtualCamera(device.label)) return null;
 
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
@@ -84,7 +58,7 @@ const AutoFocusCamera = () => {
             label: device.label || '未命名相機',
             hasAutoFocus
           };
-        } catch (_) {
+        } catch {
           return {
             deviceId: device.deviceId,
             label: device.label || '未命名相機',
@@ -93,8 +67,7 @@ const AutoFocusCamera = () => {
         }
       }));
 
-      setDeviceList(enrichedDevices);
-      return enrichedDevices;
+      return valid.filter(Boolean);
     } catch (err) {
       console.error('列出相機錯誤：', err);
       setError('⚠️ 無法取得鏡頭清單');
@@ -102,15 +75,43 @@ const AutoFocusCamera = () => {
     }
   };
 
+  const startCamera = async (deviceId = null) => {
+    stopStream();
+    try {
+      const constraints = isIPhone
+        ? { video: { facingMode: { exact: 'environment' } } }
+        : { video: { deviceId: { exact: deviceId } } };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const track = stream.getVideoTracks()[0];
+      const capture = new ImageCapture(track);
+
+      // 嘗試設定 auto focus（如果支援）
+      const caps = track.getCapabilities?.();
+      if (caps?.focusMode?.includes('continuous')) {
+        await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+      }
+
+      videoRef.current.srcObject = stream;
+      videoRef.current.play();
+      setImageCapture(capture);
+      setSelectedDeviceId(deviceId);
+    } catch (err) {
+      console.error('Start camera failed:', err);
+      setError('🚫 無法啟用鏡頭，可能未授權或不支援。');
+    }
+  };
+
   useEffect(() => {
     (async () => {
-      const devices = await updateDeviceListWithFocus();
+      const deviceList = await getValidRearDevices();
+      setDevices(deviceList);
+
       if (isIPhone) {
-        // iPhone 只能用 facingMode 啟動後鏡頭
-        await startCamera();
+        await startCamera(); // 使用 facingMode 啟動後鏡頭
       } else {
-        const preferred = devices.find(d => d.hasAutoFocus);
-        await startCamera(preferred?.deviceId || devices[0]?.deviceId);
+        const preferred = deviceList.find(d => d.hasAutoFocus);
+        await startCamera(preferred?.deviceId || deviceList[0]?.deviceId);
       }
     })();
 
@@ -119,8 +120,7 @@ const AutoFocusCamera = () => {
 
   return (
     <div style={{ fontFamily: 'sans-serif', padding: '20px' }}>
-      <h2>📷 自動對焦相機</h2>
-
+      <h2>🎯 後鏡頭相機（自動對焦 + 拍照）</h2>
       {error && <p style={{ color: 'red' }}>{error}</p>}
 
       <video
@@ -135,11 +135,13 @@ const AutoFocusCamera = () => {
           borderRadius: '8px'
         }}
       />
+
       <div style={{ marginTop: '10px' }}>
         <button onClick={handleTakePhoto}>📸 拍照</button>
       </div>
+
       <canvas
-        ref={photoCanvasRef}
+        ref={canvasRef}
         style={{
           marginTop: '10px',
           width: '240px',
@@ -148,37 +150,33 @@ const AutoFocusCamera = () => {
         }}
       />
 
-      <h3>🎛️ 可用相機裝置</h3>
-      <ul>
-        {deviceList.map(device => (
-          <li key={device.deviceId} style={{ marginBottom: '10px' }}>
-            <strong>{device.label}</strong>
-            {device.hasAutoFocus === true && (
-              <span style={{ color: 'green' }}> ✅ 自動對焦</span>
-            )}
-            {device.hasAutoFocus === false && (
-              <span style={{ color: 'gray' }}> ⚠️ 無自動對焦</span>
-            )}
-            {device.hasAutoFocus === null && (
-              <span style={{ color: 'gray' }}> 📱 無法偵測（iPhone 限制）</span>
-            )}
-            {device.deviceId === selectedDeviceId && (
-              <strong style={{ color: 'blue' }}> ← 使用中</strong>
-            )}
-            {!isIPhone && (
-              <>
+      {!isIPhone && (
+        <>
+          <h3>🔀 可切換後鏡頭（非 iPhone）</h3>
+          <ul>
+            {devices.map((device) => (
+              <li key={device.deviceId}>
+                <strong>{device.label}</strong>
+                {device.hasAutoFocus && <span style={{ color: 'green' }}> ✅ 自動對焦</span>}
+                {!device.hasAutoFocus && <span style={{ color: 'gray' }}> ⚠️ 無自動對焦</span>}
+                {device.deviceId === selectedDeviceId && <span style={{ color: 'blue' }}> ← 使用中</span>}
                 <br />
                 <button onClick={() => startCamera(device.deviceId)}>切換</button>
-              </>
-            )}
-          </li>
-        ))}
-      </ul>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {isIPhone && (
+        <p style={{ color: 'gray' }}>📱 iPhone 裝置僅使用預設後鏡頭，無法切換多顆鏡頭（Safari 限制）。</p>
+      )}
     </div>
   );
 };
 
-export default AutoFocusCamera;
+export default AutoFocusRearCameraOnly;
+
 
 
 
