@@ -10,20 +10,18 @@ const SmartCamera = () => {
   const [imageCapture, setImageCapture] = useState(null);
   const [focusSupportMap, setFocusSupportMap] = useState({});
   const [resolutionMap, setResolutionMap] = useState({});
+  const [bestCameraId, setBestCameraId] = useState(null); // 🔵 儲存推薦鏡頭
 
-  // 封裝鏡頭類型判斷
   const classifyCameraLabel = (label = "") => ({
     isVirtual: /virtual|obs|snap|manycam/i.test(label),
     isFront: /front|前置|facetime|self/i.test(label),
     isUltraWide: /ultra[- ]?wide/i.test(label),
   });
 
-  // 封裝狀態更新（Map型）
   const updateDeviceMap = (setter, deviceId, value) => {
     setter((prev) => ({ ...prev, [deviceId]: value }));
   };
 
-  // 封裝畫圖功能
   const drawAndShowBitmap = (bitmap) => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
@@ -136,13 +134,13 @@ const SmartCamera = () => {
       setVideoDevices(cameras);
       if (cameras.length === 0) return;
 
+      // ✅ 啟用第一台
       await startCamera(cameras[0].deviceId);
 
+      // ✅ 只記錄推薦鏡頭，不自動切換
       setTimeout(() => {
         const best = selectBestCamera(cameras);
-        if (best && best.deviceId !== currentDeviceId) {
-          startCamera(best.deviceId);
-        }
+        if (best) setBestCameraId(best.deviceId);
       }, 1500);
     } catch (err) {
       console.error("取得鏡頭清單失敗", err);
@@ -160,7 +158,7 @@ const SmartCamera = () => {
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 智慧相機（自動選擇最佳鏡頭）</h2>
+      <h2>📷 智慧相機（顯示最佳鏡頭建議）</h2>
 
       <video
         ref={videoRef}
@@ -196,6 +194,9 @@ const SmartCamera = () => {
                 {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}
                 {device.deviceId === currentDeviceId && (
                   <strong style={{ color: "green" }}> ← 使用中</strong>
+                )}
+                {device.deviceId === bestCameraId && (
+                  <strong style={{ color: "blue", marginLeft: "6px" }}>★ 推薦</strong>
                 )}
                 <div>
                   🔍 自動對焦：{" "}
