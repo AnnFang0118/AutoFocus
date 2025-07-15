@@ -11,9 +11,26 @@ const SmartCamera = () => {
   const [focusSupportMap, setFocusSupportMap] = useState({});
   const [resolutionMap, setResolutionMap] = useState({});
 
-  const isVirtual = (label = "") => /virtual|obs|snap|manycam/i.test(label);
-  const isFront = (label = "") => /front|前置|facetime|self/i.test(label);
-  const isUltraWide = (label = "") => /ultra[- ]?wide/i.test(label);
+  // 封裝鏡頭類型判斷
+  const classifyCameraLabel = (label = "") => ({
+    isVirtual: /virtual|obs|snap|manycam/i.test(label),
+    isFront: /front|前置|facetime|self/i.test(label),
+    isUltraWide: /ultra[- ]?wide/i.test(label),
+  });
+
+  // 封裝狀態更新（Map型）
+  const updateDeviceMap = (setter, deviceId, value) => {
+    setter((prev) => ({ ...prev, [deviceId]: value }));
+  };
+
+  // 封裝畫圖功能
+  const drawAndShowBitmap = (bitmap) => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    ctx.drawImage(bitmap, 0, 0);
+  };
 
   const stopCurrentStream = () => {
     const stream = videoRef.current?.srcObject;
@@ -22,30 +39,22 @@ const SmartCamera = () => {
     }
   };
 
-  const drawImage = (bitmap) => {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    ctx.drawImage(bitmap, 0, 0);
-  };
-
   const takePhoto = async () => {
     if (!imageCapture) return;
     try {
       if (!isIOS && imageCapture.takePhoto) {
         const blob = await imageCapture.takePhoto();
         const bitmap = await createImageBitmap(blob);
-        drawImage(bitmap);
+        drawAndShowBitmap(bitmap);
       } else {
         const bitmap = await imageCapture.grabFrame();
-        drawImage(bitmap);
+        drawAndShowBitmap(bitmap);
       }
     } catch (err) {
       console.warn("拍照失敗，使用 grabFrame 備案", err);
       try {
         const bitmap = await imageCapture.grabFrame();
-        drawImage(bitmap);
+        drawAndShowBitmap(bitmap);
       } catch (e) {
         console.error("grabFrame 也失敗", e);
       }
@@ -55,13 +64,8 @@ const SmartCamera = () => {
   const checkAutoFocusSupport = async (track, deviceId) => {
     try {
       const capabilities = track.getCapabilities?.();
-      const focusModes = capabilities?.focusMode || [];
-      const hasAutoFocus = focusModes.includes("auto");
-
-      setFocusSupportMap((prev) => ({
-        ...prev,
-        [deviceId]: hasAutoFocus,
-      }));
+      const hasAutoFocus = capabilities?.focusMode?.includes("auto") || false;
+      updateDeviceMap(setFocusSupportMap, deviceId, hasAutoFocus);
     } catch (err) {
       console.warn(`偵測 ${deviceId} 對焦能力失敗`, err);
     }
@@ -85,13 +89,10 @@ const SmartCamera = () => {
       setCurrentDeviceId(settings.deviceId);
       videoRef.current.srcObject = stream;
 
-      setResolutionMap((prev) => ({
-        ...prev,
-        [settings.deviceId]: {
-          width: settings.width || 0,
-          height: settings.height || 0,
-        },
-      }));
+      updateDeviceMap(setResolutionMap, settings.deviceId, {
+        width: settings.width || 0,
+        height: settings.height || 0,
+      });
 
       try {
         const capture = new ImageCapture(track);
@@ -108,10 +109,11 @@ const SmartCamera = () => {
 
   const selectBestCamera = (cameras) => {
     const scored = cameras.map((cam) => {
+      const { isUltraWide } = classifyCameraLabel(cam.label);
       const auto = focusSupportMap[cam.deviceId] ? 1 : 0;
       const res = resolutionMap[cam.deviceId] || { width: 0, height: 0 };
       const totalPixels = res.width * res.height;
-      const ultraPenalty = isUltraWide(cam.label) ? -1000000 : 0;
+      const ultraPenalty = isUltraWide ? -1000000 : 0;
 
       return {
         device: cam,
@@ -126,18 +128,16 @@ const SmartCamera = () => {
   const getCameras = async () => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const cameras = devices.filter(
-        (d) => d.kind === "videoinput" && !isVirtual(d.label) && !isFront(d.label)
-      );
+      const cameras = devices.filter((d) => {
+        const { isVirtual, isFront } = classifyCameraLabel(d.label);
+        return d.kind === "videoinput" && !isVirtual && !isFront;
+      });
 
       setVideoDevices(cameras);
-
       if (cameras.length === 0) return;
 
-      // 先啟用第一個（觸發 capabilities 與解析度偵測）
       await startCamera(cameras[0].deviceId);
 
-      // 過一小段時間後選擇最適合的鏡頭
       setTimeout(() => {
         const best = selectBestCamera(cameras);
         if (best && best.deviceId !== currentDeviceId) {
