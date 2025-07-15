@@ -10,7 +10,7 @@ const SmartCamera = () => {
   const [imageCapture, setImageCapture] = useState(null);
   const [focusSupportMap, setFocusSupportMap] = useState({});
   const [resolutionMap, setResolutionMap] = useState({});
-  const [bestCameraId, setBestCameraId] = useState(null); // 🔵 儲存推薦鏡頭
+  const [bestCameraId, setBestCameraId] = useState(null);
 
   const classifyCameraLabel = (label = "") => ({
     isVirtual: /virtual|obs|snap|manycam/i.test(label),
@@ -62,10 +62,11 @@ const SmartCamera = () => {
   const checkAutoFocusSupport = async (track, deviceId) => {
     try {
       const capabilities = track.getCapabilities?.();
-      const hasAutoFocus = capabilities?.focusMode?.includes("auto") || false;
+      const hasAutoFocus = capabilities?.focusMode?.includes("auto") || null;
       updateDeviceMap(setFocusSupportMap, deviceId, hasAutoFocus);
     } catch (err) {
       console.warn(`偵測 ${deviceId} 對焦能力失敗`, err);
+      updateDeviceMap(setFocusSupportMap, deviceId, null);
     }
   };
 
@@ -134,10 +135,8 @@ const SmartCamera = () => {
       setVideoDevices(cameras);
       if (cameras.length === 0) return;
 
-      // ✅ 啟用第一台
       await startCamera(cameras[0].deviceId);
 
-      // ✅ 只記錄推薦鏡頭，不自動切換
       setTimeout(() => {
         const best = selectBestCamera(cameras);
         if (best) setBestCameraId(best.deviceId);
@@ -184,6 +183,9 @@ const SmartCamera = () => {
 
       <div style={{ marginTop: "20px" }}>
         <h4>可用鏡頭（排除前鏡頭與虛擬鏡頭）</h4>
+        <p style={{ fontSize: "12px", color: "#666" }}>
+          * 自動對焦能力由瀏覽器回報，部分裝置可能無法判斷
+        </p>
         <ul>
           {videoDevices.map((device) => {
             const supportsAutoFocus = focusSupportMap[device.deviceId];
@@ -196,15 +198,17 @@ const SmartCamera = () => {
                   <strong style={{ color: "green" }}> ← 使用中</strong>
                 )}
                 {device.deviceId === bestCameraId && (
-                  <strong style={{ color: "blue", marginLeft: "6px" }}>★ 推薦</strong>
+                  <strong style={{ color: "blue", marginLeft: "6px" }}>
+                    ★ 推薦
+                  </strong>
                 )}
                 <div>
                   🔍 自動對焦：{" "}
-                  {supportsAutoFocus === undefined
-                    ? "偵測中..."
-                    : supportsAutoFocus
+                  {supportsAutoFocus === true
                     ? "✅ 有"
-                    : "❌ 無"}
+                    : supportsAutoFocus === false
+                    ? "❌ 無"
+                    : "❓ 無法判斷"}
                 </div>
                 <div>
                   📏 解析度：{" "}
