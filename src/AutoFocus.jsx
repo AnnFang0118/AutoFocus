@@ -74,12 +74,16 @@ const SmartCamera = () => {
     stopCurrentStream();
     setImageCapture(null);
 
+    const isBest = deviceId === bestCameraId;
+
     const constraints = {
       video: {
         deviceId: deviceId ? { exact: deviceId } : undefined,
         facingMode: !deviceId ? { exact: "environment" } : undefined,
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
+        ...(isBest && {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        }),
       },
     };
 
@@ -138,12 +142,12 @@ const SmartCamera = () => {
       setVideoDevices(cameras);
       if (cameras.length === 0) return;
 
-      // ✅ 不先啟動任何一台，等待最佳鏡頭評分
+      // 評分後只開啟一次推薦鏡頭
       setTimeout(() => {
         const best = selectBestCamera(cameras);
         if (best) {
           setBestCameraId(best.deviceId);
-          startCamera(best.deviceId); // ✅ 只啟用一次推薦鏡頭
+          startCamera(best.deviceId);
         }
       }, 1500);
     } catch (err) {
@@ -235,3 +239,4 @@ const SmartCamera = () => {
 };
 
 export default SmartCamera;
+
