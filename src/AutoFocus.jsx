@@ -62,7 +62,7 @@ const SmartCamera = () => {
   const checkAutoFocusSupport = async (track, deviceId) => {
     try {
       const capabilities = track.getCapabilities?.();
-      const hasAutoFocus = capabilities?.focusMode?.includes("auto") || null;
+      const hasAutoFocus = capabilities?.focusMode?.includes("auto") ?? null;
       updateDeviceMap(setFocusSupportMap, deviceId, hasAutoFocus);
     } catch (err) {
       console.warn(`偵測 ${deviceId} 對焦能力失敗`, err);
@@ -78,6 +78,8 @@ const SmartCamera = () => {
       video: {
         deviceId: deviceId ? { exact: deviceId } : undefined,
         facingMode: !deviceId ? { exact: "environment" } : undefined,
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
       },
     };
 
@@ -103,6 +105,7 @@ const SmartCamera = () => {
       checkAutoFocusSupport(track, settings.deviceId);
     } catch (err) {
       console.error("相機啟用失敗", err);
+      alert("⚠️ 鏡頭啟用失敗：" + err.message);
     }
   };
 
@@ -135,11 +138,13 @@ const SmartCamera = () => {
       setVideoDevices(cameras);
       if (cameras.length === 0) return;
 
-      await startCamera(cameras[0].deviceId);
-
+      // ✅ 不先啟動任何一台，等待最佳鏡頭評分
       setTimeout(() => {
         const best = selectBestCamera(cameras);
-        if (best) setBestCameraId(best.deviceId);
+        if (best) {
+          setBestCameraId(best.deviceId);
+          startCamera(best.deviceId); // ✅ 只啟用一次推薦鏡頭
+        }
       }, 1500);
     } catch (err) {
       console.error("取得鏡頭清單失敗", err);
@@ -157,13 +162,14 @@ const SmartCamera = () => {
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 智慧相機（顯示最佳鏡頭建議）</h2>
+      <h2>📷 智慧相機（推薦鏡頭會自動啟用一次）</h2>
 
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
+        onError={() => alert("⚠️ 鏡頭畫面播放失敗")}
         style={{ width: "100%", maxWidth: "500px", borderRadius: "10px" }}
       />
 
