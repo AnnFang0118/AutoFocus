@@ -5,42 +5,32 @@ const CameraViewer = () => {
   const streamRef = useRef(null);
   const [info, setInfo] = useState('載入中...');
 
-  // 打分關鍵字表
+  // 關鍵字窮舉法評分表
   const keywordWeights = [
     { keywords: ['macro', 'microscope', 'close-up'], score: 5 },
     { keywords: ['tele', 'telephoto', 'zoom'], score: 4 },
     { keywords: ['main', 'standard', 'default'], score: 3 },
-    { keywords: ['back'], score: 2 },
-    { keywords: ['ultrawide', 'wide-angle', 'wide'], score: 1 },
+    { keywords: ['ultrawide', 'wide-angle'], score: 2 },
+    { keywords: ['back'], score: 1 },
     { keywords: ['front', 'selfie'], score: -2 },
     { keywords: ['depth', 'bokeh', 'tof', '3d'], score: -3 },
-    { keywords: ['ir', 'aux', 'unknown'], score: -5 }
+    { keywords: ['ir', 'aux', 'unknown'], score: -5 },
   ];
 
-  // 根據 label 打分
   const scoreCameraLabel = (label = '') => {
     const l = label.toLowerCase();
-    if (!l) return -999;
     let score = 0;
+    if (!l) return -999; // 未授權、無標籤的鏡頭
     for (const { keywords, score: kwScore } of keywordWeights) {
-      if (keywords.some(k => l.includes(k))) score += kwScore;
+      if (keywords.some(keyword => l.includes(keyword))) {
+        score += kwScore;
+      }
     }
-    // fallback：Camera 0 通常為主鏡頭
-    if (/camera\s?0/.test(l)) score += 2;
+    // Fallback：根據 Camera 0/1/2 推測
+    if (/camera\s*0/.test(l)) score += 3;
+    if (/camera\s*1/.test(l)) score -= 2;
+    if (/camera\s*2/.test(l)) score += 2;
     return score;
-  };
-
-  // 探測鏡頭 focusDistance 能力
-  const probeFocusDistance = async (deviceId) => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId } });
-      const track = stream.getVideoTracks()[0];
-      const caps = track.getCapabilities();
-      stream.getTracks().forEach(t => t.stop());
-      return caps.focusDistance || null;
-    } catch {
-      return null;
-    }
   };
 
   const detectDevicePlatform = () => {
@@ -74,72 +64,73 @@ const CameraViewer = () => {
     const gatherInfo = async () => {
       try {
         const lines = [];
-        
-        // 基本 UA 與裝置資訊
+
+        // 基本 UA / 平台 / 品牌
         lines.push(`🧠 User Agent:\n${navigator.userAgent}\n`);
         lines.push(`📱 預測平台: ${detectDevicePlatform()}`);
         lines.push(`🏷️ 預測品牌: ${detectBrandFromUserAgent()}`);
 
-        // UA-CH
+        // UA-CH 高精度資訊
         if (navigator.userAgentData?.getHighEntropyValues) {
           try {
             const uaDetails = await navigator.userAgentData.getHighEntropyValues([
-              'platform', 'platformVersion', 'model', 'architecture', 'bitness', 'fullVersionList'
+              'platform',
+              'platformVersion',
+              'model',
+              'architecture',
+              'bitness',
+              'fullVersionList',
             ]);
             lines.push(`\n🔍 UA-CH 裝置資訊（高精度）:`);
             Object.entries(uaDetails).forEach(([key, value]) => {
               lines.push(`• ${key}: ${value}`);
             });
           } catch {
-            lines.push('\n⚠️ 無法取得 UA-CH 裝置資訊（可能未授權）');
+            lines.push('\n⚠️ 無法取得 UA-CH 裝置資訊');
           }
         } else {
-          lines.push('\n⚠️ 瀏覽器不支援 User-Agent Client Hints (UA-CH)');
+          lines.push('\n⚠️ 瀏覽器不支援 UA-CH');
         }
 
-        // 列出並評估所有鏡頭，排除前置鏡頭
+        // 列出所有相機裝置
         const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoInputs = devices.filter(
-          d => d.kind === 'videoinput' && !/(front|selfie)/i.test(d.label || '')
-        );
-        if (videoInputs.length === 0) throw new Error('找不到任何後置或主鏡頭裝置');
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
 
-        // 打分 & 探測
-        const cams = await Promise.all(
-          videoInputs.map(async (d, idx) => {
-            const label = d.label || `Camera ${idx}`;
-            const labelScore = scoreCameraLabel(label);
-            const focusDist = await probeFocusDistance(d.deviceId);
-            return { ...d, label, labelScore, focusDist };
-          })
+        // 過濾掉前鏡頭（label 包含 front/selfie）
+        const rearCameras = videoInputs.filter(d =>
+          !/(front|selfie)/i.test(d.label || '')
         );
+        // 若全部都被過濾，退回原列表
+        const candidates = rearCameras.length ? rearCameras : videoInputs;
 
-        lines.push('\n📋 可用鏡頭裝置 (排除前鏡頭):');
-        cams.forEach((cam, i) => {
-          lines.push(`鏡頭 ${i + 1}:`);
-          lines.push(`• label: ${cam.label}`);
-          lines.push(`• labelScore: ${cam.labelScore}`);
-          lines.push(`• focusDistance: ${cam.focusDist ? `min=${cam.focusDist.min}, max=${cam.focusDist.max}` : '(不支援)'}`);
+        lines.push('\n📋 可用後置鏡頭（不含前鏡頭）:');
+        candidates.forEach((device, idx) => {
+          lines.push(`相機 ${idx + 1}:`);
+          lines.push(`• label: ${device.label || '(無法取得)'}`);
+          lines.push(`• deviceId: ${device.deviceId}\n`);
         });
 
-        // 選出最佳鏡頭
-        let best = cams[0];
-        const withFocus = cams.filter(c => c.focusDist);
-        if (withFocus.length > 0) {
-          best = withFocus.reduce((a, b) => (a.focusDist.min < b.focusDist.min ? a : b));
-        } else {
-          best = cams.reduce((a, b) => (a.labelScore > b.labelScore ? a : b));
-        }
-        lines.push(`\n🌟 推薦鏡頭 (不含前鏡頭): ${best.label}`);
+        // 根據 label 計分並找出最高分
+        const scored = candidates.map(d => ({
+          ...d,
+          score: scoreCameraLabel(d.label),
+        }));
+        const best = scored.sort((a, b) => b.score - a.score)[0];
+        lines.push(`\n🌟 推薦後置鏡頭: ${best.label || '(無法判斷)'}`);
 
-        // 關閉舊串流
+        // 停掉舊串流
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(t => t.stop());
         }
 
-        // 啟用最佳鏡頭
+        // 打開推薦鏡頭
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: best.deviceId, width: { ideal: 1920 }, height: { ideal: 1080 } }
+          video: {
+            deviceId: best.deviceId,
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            facingMode: 'environment',
+          },
         });
         streamRef.current = stream;
         if (videoRef.current) {
@@ -147,33 +138,38 @@ const CameraViewer = () => {
           await videoRef.current.play();
         }
 
-        // 顯示 MediaTrack 設定與能力
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
+        // 顯示 MediaTrack Settings & Capabilities
+        const track = stream.getVideoTracks()[0];
+        if (track) {
           lines.push('\n🎥 MediaTrack Settings:');
-          Object.entries(videoTrack.getSettings()).forEach(([key, value]) => {
-            lines.push(`• ${key}: ${value}`);
+          const settings = track.getSettings();
+          Object.entries(settings).forEach(([k, v]) => {
+            lines.push(`• ${k}: ${v}`);
           });
-          if (typeof videoTrack.getCapabilities === 'function') {
+          if (typeof track.getCapabilities === 'function') {
             lines.push('\n📈 MediaTrack Capabilities:');
-            Object.entries(videoTrack.getCapabilities()).forEach(([key, value]) => {
-              lines.push(`• ${key}: ${JSON.stringify(value)}`);
+            const caps = track.getCapabilities();
+            Object.entries(caps).forEach(([k, v]) => {
+              lines.push(`• ${k}: ${JSON.stringify(v)}`);
             });
           }
         }
 
-        lines.push('\n📌 註：此推薦排除前鏡頭，僅選擇後置鏡頭。');
+        lines.push(
+          '\n📌 註：已過濾前鏡頭，僅從後置鏡頭中自動推薦最適合拍證件的鏡頭。'
+        );
         setInfo(lines.join('\n'));
       } catch (err) {
-        console.error('Error:', err);
+        console.error(err);
         setInfo(`❌ 錯誤：${err.message}`);
       }
     };
 
     gatherInfo();
+
     return () => {
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current.getTracks().forEach(t => t.stop());
         streamRef.current = null;
       }
       if (videoRef.current) {
@@ -190,7 +186,12 @@ const CameraViewer = () => {
         autoPlay
         playsInline
         muted
-        style={{ width: '100%', maxWidth: '500px', border: '1px solid black', borderRadius: '8px' }}
+        style={{
+          width: '100%',
+          maxWidth: '500px',
+          border: '1px solid black',
+          borderRadius: '8px',
+        }}
       />
       <h2 style={{ marginTop: '20px' }}>📦 裝置詳細資訊</h2>
       <pre
@@ -204,7 +205,7 @@ const CameraViewer = () => {
           overflowX: 'auto',
           fontSize: '14px',
           lineHeight: '1.5',
-          wordBreak: 'break-word'
+          wordBreak: 'break-word',
         }}
       >
         {info}
