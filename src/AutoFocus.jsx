@@ -20,13 +20,13 @@ const CameraViewer = () => {
   const scoreCameraLabel = (label = '') => {
     const l = label.toLowerCase();
     let score = 0;
-    if (!l) return -999; // 未授權、無標籤的鏡頭
+    if (!l) return -999; // 未授權或無標籤
     for (const { keywords, score: kwScore } of keywordWeights) {
       if (keywords.some(keyword => l.includes(keyword))) {
         score += kwScore;
       }
     }
-    // Fallback：根據 Camera 0/1/2 推測
+    // Fallback：Camera 0/1/2
     if (/camera\s*0/.test(l)) score += 3;
     if (/camera\s*1/.test(l)) score -= 2;
     if (/camera\s*2/.test(l)) score += 2;
@@ -115,8 +115,22 @@ const CameraViewer = () => {
           ...d,
           score: scoreCameraLabel(d.label),
         }));
-        const best = scored.sort((a, b) => b.score - a.score)[0];
-        lines.push(`\n🌟 推薦後置鏡頭: ${best.label || '(無法判斷)'}`);
+        let best = scored.sort((a, b) => b.score - a.score)[0];
+
+        // 若最高分 ≤ 0，fallback 到第一支後置鏡頭
+        if (best.score <= 0) {
+          lines.push(
+            '\n⚠️ 無法透過關鍵字自動判斷最適鏡頭，改用第一支後置鏡頭作為預設'
+          );
+          best = scored[0];
+        }
+
+        // 顯示推薦
+        lines.push(
+          `\n🌟 推薦後置鏡頭: ${
+            best.label ? best.label : `(無名稱，deviceId=${best.deviceId})`
+          }`
+        );
 
         // 停掉舊串流
         if (streamRef.current) {
@@ -156,7 +170,7 @@ const CameraViewer = () => {
         }
 
         lines.push(
-          '\n📌 註：已過濾前鏡頭，僅從後置鏡頭中自動推薦最適合拍證件的鏡頭。'
+          '\n📌 註：已過濾前鏡頭，若自動判斷失敗則採用第一支後置鏡頭。'
         );
         setInfo(lines.join('\n'));
       } catch (err) {
