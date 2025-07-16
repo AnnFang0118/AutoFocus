@@ -8,10 +8,12 @@ const SmartCamera = () => {
   const [videoDevices, setVideoDevices] = useState([]);
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
   const [imageCapture, setImageCapture] = useState(null);
-  const [error, setError] = useState(null);
+  const [focusSupportMap, setFocusSupportMap] = useState({});
+  const [resolutionMap, setResolutionMap] = useState({});
 
   const isVirtual = (label = "") => /virtual|obs|snap|manycam/i.test(label);
   const isFront = (label = "") => /front|前置|facetime|self/i.test(label);
+  const isUltraWide = (label = "") => /ultra[- ]?wide/i.test(label);
 
   const stopCurrentStream = () => {
     const stream = videoRef.current?.srcObject;
@@ -50,10 +52,24 @@ const SmartCamera = () => {
     }
   };
 
+  const checkAutoFocusSupport = async (track, deviceId) => {
+    try {
+      const capabilities = track.getCapabilities?.();
+      const focusModes = capabilities?.focusMode || [];
+      const hasAutoFocus = focusModes.includes("auto");
+
+      setFocusSupportMap((prev) => ({
+        ...prev,
+        [deviceId]: hasAutoFocus,
+      }));
+    } catch (err) {
+      console.warn(`偵測 ${deviceId} 對焦能力失敗`, err);
+    }
+  };
+
   const startCamera = async (deviceId = null) => {
-    stopCurrentStream(); // 🛑 停止先前相機
+    stopCurrentStream();
     setImageCapture(null);
-    setError(null);
 
     const constraints = {
       video: {
@@ -67,9 +83,15 @@ const SmartCamera = () => {
       const track = stream.getVideoTracks()[0];
       const settings = track.getSettings();
       setCurrentDeviceId(settings.deviceId);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
+      videoRef.current.srcObject = stream;
+
+      setResolutionMap((prev) => ({
+        ...prev,
+        [settings.deviceId]: {
+          width: settings.width || 0,
+          height: settings.height || 0,
+        },
+      }));
 
       try {
         const capture = new ImageCapture(track);
@@ -77,9 +99,10 @@ const SmartCamera = () => {
       } catch (err) {
         console.warn("ImageCapture 初始化失敗", err);
       }
+
+      checkAutoFocusSupport(track, settings.deviceId);
     } catch (err) {
       console.error("相機啟用失敗", err);
-      setError("無法啟動相機，請確認權限與裝置可用性。");
     }
   };
 
@@ -87,15 +110,10 @@ const SmartCamera = () => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const cameras = devices.filter(
-        (d) => d.kind === "videoinput" && !isVirtual(d.label)
+        (d) => d.kind === "videoinput" && !isVirtual(d.label) && !isFront(d.label)
       );
-      setVideoDevices(cameras);
 
-      // 預設啟用第一支非前鏡頭
-      const preferred = cameras.find((d) => !isFront(d.label)) || cameras[0];
-      if (preferred) {
-        startCamera(preferred.deviceId);
-      }
+      setVideoDevices(cameras);
     } catch (err) {
       console.error("取得鏡頭清單失敗", err);
     }
@@ -112,9 +130,7 @@ const SmartCamera = () => {
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 智慧相機（多鏡頭支援）</h2>
-
-      {error && <div style={{ color: "red" }}>⚠️ {error}</div>}
+      <h2>📷 智慧相機（請手動選擇鏡頭）</h2>
 
       <video
         ref={videoRef}
@@ -139,20 +155,38 @@ const SmartCamera = () => {
       />
 
       <div style={{ marginTop: "20px" }}>
-        <h4>可用鏡頭</h4>
+        <h4>可用鏡頭（排除前鏡頭與虛擬鏡頭）</h4>
         <ul>
-          {videoDevices.map((device) => (
-            <li key={device.deviceId}>
-              {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}
-              {device.deviceId === currentDeviceId && (
-                <strong style={{ color: "green" }}> ← 使用中</strong>
-              )}
-              <br />
-              <button onClick={() => startCamera(device.deviceId)}>
-                切換到此鏡頭
-              </button>
-            </li>
-          ))}
+          {videoDevices.map((device) => {
+            const supportsAutoFocus = focusSupportMap[device.deviceId];
+            const resolution = resolutionMap[device.deviceId];
+
+            return (
+              <li key={device.deviceId}>
+                {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}
+                {device.deviceId === currentDeviceId && (
+                  <strong style={{ color: "green" }}> ← 使用中</strong>
+                )}
+                <div>
+                  🔍 自動對焦：{" "}
+                  {supportsAutoFocus === undefined
+                    ? "偵測中..."
+                    : supportsAutoFocus
+                    ? "✅ 有"
+                    : "❌ 無"}
+                </div>
+                <div>
+                  📏 解析度：{" "}
+                  {resolution
+                    ? `${resolution.width}×${resolution.height}`
+                    : "讀取中..."}
+                </div>
+                <button onClick={() => startCamera(device.deviceId)}>
+                  切換到此鏡頭
+                </button>
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>
@@ -160,4 +194,3 @@ const SmartCamera = () => {
 };
 
 export default SmartCamera;
-
