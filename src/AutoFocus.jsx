@@ -20,7 +20,7 @@ const CameraViewer = () => {
   // 根據 label 打分
   const scoreCameraLabel = (label = '') => {
     const l = label.toLowerCase();
-    if (!l) return -999; // 尚未授權或無資訊
+    if (!l) return -999;
     let score = 0;
     for (const { keywords, score: kwScore } of keywordWeights) {
       if (keywords.some(k => l.includes(k))) score += kwScore;
@@ -74,7 +74,7 @@ const CameraViewer = () => {
     const gatherInfo = async () => {
       try {
         const lines = [];
-
+        
         // 基本 UA 與裝置資訊
         lines.push(`🧠 User Agent:\n${navigator.userAgent}\n`);
         lines.push(`📱 預測平台: ${detectDevicePlatform()}`);
@@ -97,10 +97,12 @@ const CameraViewer = () => {
           lines.push('\n⚠️ 瀏覽器不支援 User-Agent Client Hints (UA-CH)');
         }
 
-        // 列出並評估所有鏡頭
+        // 列出並評估所有鏡頭，排除前置鏡頭
         const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoInputs = devices.filter(d => d.kind === 'videoinput');
-        if (videoInputs.length === 0) throw new Error('找不到任何相機裝置');
+        const videoInputs = devices.filter(
+          d => d.kind === 'videoinput' && !/(front|selfie)/i.test(d.label || '')
+        );
+        if (videoInputs.length === 0) throw new Error('找不到任何後置或主鏡頭裝置');
 
         // 打分 & 探測
         const cams = await Promise.all(
@@ -112,7 +114,7 @@ const CameraViewer = () => {
           })
         );
 
-        lines.push('\n📋 可用相機裝置:');
+        lines.push('\n📋 可用鏡頭裝置 (排除前鏡頭):');
         cams.forEach((cam, i) => {
           lines.push(`鏡頭 ${i + 1}:`);
           lines.push(`• label: ${cam.label}`);
@@ -128,7 +130,7 @@ const CameraViewer = () => {
         } else {
           best = cams.reduce((a, b) => (a.labelScore > b.labelScore ? a : b));
         }
-        lines.push(`\n🌟 推薦鏡頭: ${best.label}`);
+        lines.push(`\n🌟 推薦鏡頭 (不含前鏡頭): ${best.label}`);
 
         // 關閉舊串流
         if (streamRef.current) {
@@ -136,7 +138,9 @@ const CameraViewer = () => {
         }
 
         // 啟用最佳鏡頭
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: best.deviceId, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: best.deviceId, width: { ideal: 1920 }, height: { ideal: 1080 } }
+        });
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -147,20 +151,18 @@ const CameraViewer = () => {
         const videoTrack = stream.getVideoTracks()[0];
         if (videoTrack) {
           lines.push('\n🎥 MediaTrack Settings:');
-          const settings = videoTrack.getSettings();
-          Object.entries(settings).forEach(([key, value]) => {
+          Object.entries(videoTrack.getSettings()).forEach(([key, value]) => {
             lines.push(`• ${key}: ${value}`);
           });
           if (typeof videoTrack.getCapabilities === 'function') {
             lines.push('\n📈 MediaTrack Capabilities:');
-            const caps = videoTrack.getCapabilities();
-            Object.entries(caps).forEach(([key, value]) => {
+            Object.entries(videoTrack.getCapabilities()).forEach(([key, value]) => {
               lines.push(`• ${key}: ${JSON.stringify(value)}`);
             });
           }
         }
 
-        lines.push('\n📌 註：鏡頭用途推測基於 label & focusDistance，實際效果因裝置而異。');
+        lines.push('\n📌 註：此推薦排除前鏡頭，僅選擇後置鏡頭。');
         setInfo(lines.join('\n'));
       } catch (err) {
         console.error('Error:', err);
