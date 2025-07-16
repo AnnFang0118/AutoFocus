@@ -10,26 +10,12 @@ const SmartCamera = () => {
   const [imageCapture, setImageCapture] = useState(null);
   const [focusSupportMap, setFocusSupportMap] = useState({});
   const [resolutionMap, setResolutionMap] = useState({});
-  const [bestCameraId, setBestCameraId] = useState(null);
-  const [cameraDebugInfo, setCameraDebugInfo] = useState(null);
+  const [failedDevices, setFailedDevices] = useState(new Set());
 
-  const classifyCameraLabel = (label = "") => ({
-    isVirtual: /virtual|obs|snap|manycam/i.test(label),
-    isFront: /front|\u524d\u7f6e|facetime|self/i.test(label),
-    isUltraWide: /ultra[- ]?wide/i.test(label),
-  });
-
-  const updateDeviceMap = (setter, deviceId, value) => {
-    setter((prev) => ({ ...prev, [deviceId]: value }));
-  };
-
-  const drawAndShowBitmap = (bitmap) => {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    ctx.drawImage(bitmap, 0, 0);
-  };
+  const isVirtual = (label = "") => /virtual|obs|snap|manycam/i.test(label);
+  const isFront = (label = "") =>
+    /front|前置|facetime|self/i.test(label) && !/usb|camera|webcam/i.test(label);
+  const isUltraWide = (label = "") => /ultra[- ]?wide/i.test(label);
 
   const stopCurrentStream = () => {
     const stream = videoRef.current?.srcObject;
@@ -38,24 +24,32 @@ const SmartCamera = () => {
     }
   };
 
+  const drawImage = (bitmap) => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    ctx.drawImage(bitmap, 0, 0);
+  };
+
   const takePhoto = async () => {
     if (!imageCapture) return;
     try {
       if (!isIOS && imageCapture.takePhoto) {
         const blob = await imageCapture.takePhoto();
         const bitmap = await createImageBitmap(blob);
-        drawAndShowBitmap(bitmap);
+        drawImage(bitmap);
       } else {
         const bitmap = await imageCapture.grabFrame();
-        drawAndShowBitmap(bitmap);
+        drawImage(bitmap);
       }
     } catch (err) {
-      console.warn("\u62cd\u7167\u5931\u6557\uff0c\u4f7f\u7528 grabFrame \u5099\u6848", err);
+      console.warn("拍照失敗，使用 grabFrame 備案", err);
       try {
         const bitmap = await imageCapture.grabFrame();
-        drawAndShowBitmap(bitmap);
+        drawImage(bitmap);
       } catch (e) {
-        console.error("grabFrame \u4e5f\u5931\u6551", e);
+        console.error("grabFrame 也失敗", e);
       }
     }
   };
@@ -63,11 +57,14 @@ const SmartCamera = () => {
   const checkAutoFocusSupport = async (track, deviceId) => {
     try {
       const capabilities = track.getCapabilities?.();
-      const hasAutoFocus = capabilities?.focusMode?.includes("auto") ?? null;
-      updateDeviceMap(setFocusSupportMap, deviceId, hasAutoFocus);
+      const focusModes = capabilities?.focusMode || [];
+      const hasAutoFocus = focusModes.includes("auto");
+      setFocusSupportMap((prev) => ({
+        ...prev,
+        [deviceId]: hasAutoFocus,
+      }));
     } catch (err) {
-      console.warn(`\u5075\u6e2c ${deviceId} \u5c0d\u7126\u80fd\u529b\u5931\u6557`, err);
-      updateDeviceMap(setFocusSupportMap, deviceId, null);
+      console.warn(`偵測 ${deviceId} 對焦能力失敗`, err);
     }
   };
 
@@ -78,85 +75,111 @@ const SmartCamera = () => {
     const constraints = {
       video: {
         deviceId: deviceId ? { exact: deviceId } : undefined,
-        facingMode: !deviceId ? { exact: "environment" } : undefined
-      }
+        facingMode: !deviceId ? { ideal: "environment" } : undefined,
+      },
     };
 
     try {
-      console.log("\uD83C\uDFA5 嘗試啟用鏡頭：", deviceId, constraints);
-
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       const track = stream.getVideoTracks()[0];
-
-      if (!track) {
-        alert("\u26D4\uFE0F 無法取得 video track");
-        setCameraDebugInfo({ error: "無法取得 video track", deviceId });
-        return;
-      }
-
       const settings = track.getSettings();
-      const capabilities = track.getCapabilities?.();
-
-      console.log("\u2705 鏡頭啟用成功:", {
-        settings,
-        capabilities,
-        label: track.label,
-      });
-
-      setCameraDebugInfo({
-        deviceId: settings.deviceId,
-        label: track.label,
-        settings,
-        capabilities,
-      });
-
-      setCurrentDeviceId(settings.deviceId);
       videoRef.current.srcObject = stream;
+      setCurrentDeviceId(settings.deviceId);
 
-      updateDeviceMap(setResolutionMap, settings.deviceId, {
-        width: settings.width || 0,
-        height: settings.height || 0,
-      });
+      const capture = new ImageCapture(track);
+      setImageCapture(capture);
 
-      try {
-        const capture = new ImageCapture(track);
-        setImageCapture(capture);
-      } catch (err) {
-        console.warn("ImageCapture 初始化失敗", err);
-      }
+      const bitmap = await capture.grabFrame();
+      drawImage(bitmap);
+
+      setResolutionMap((prev) => ({
+        ...prev,
+        [settings.deviceId]: {
+          width: bitmap.width,
+          height: bitmap.height,
+        },
+      }));
 
       checkAutoFocusSupport(track, settings.deviceId);
+
+      return true;
     } catch (err) {
-      console.error("\u274C 鏡頭啟用失敗：", err);
-      alert("⚠️ 鏡頭啟用失敗：" + err.message);
-
-      // fallback：啟用第一顆成功過的鏡頭
-      const fallback = videoDevices.find((d) => d.deviceId !== deviceId);
-      if (fallback) {
-        alert("➡️ 改用其他鏡頭");
-        startCamera(fallback.deviceId);
-      }
-
-      setCameraDebugInfo({
-        error: err.message,
-        deviceId,
-        constraints,
-      });
+      console.error("相機啟用失敗", deviceId, err);
+      setFailedDevices((prev) => new Set(prev).add(deviceId));
+      return false;
     }
   };
 
-  // 其他程式碼保持不變...
+  const selectBestCamera = (cameras) => {
+    const scored = cameras.map((cam) => {
+      const auto = focusSupportMap[cam.deviceId] ? 1 : 0;
+      const res = resolutionMap[cam.deviceId] || { width: 0, height: 0 };
+      const totalPixels = res.width * res.height;
+      const ultraPenalty = isUltraWide(cam.label) ? -1000000 : 0;
+
+      return {
+        device: cam,
+        score: auto * 1000000 + totalPixels + ultraPenalty,
+      };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0]?.device;
+  };
+
+  const getCameras = async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter((d) => d.kind === "videoinput");
+
+      setVideoDevices(cameras);
+
+      const validCameras = cameras.filter(
+        (d) => !isVirtual(d.label) && !isFront(d.label)
+      );
+
+      if (validCameras.length === 0) return;
+
+      // 先啟用第一顆
+      for (let cam of validCameras) {
+        const success = await startCamera(cam.deviceId);
+        if (success) break;
+      }
+
+      // 過一段時間挑選最佳
+      setTimeout(async () => {
+        const available = validCameras.filter(
+          (d) => !failedDevices.has(d.deviceId)
+        );
+        const best = selectBestCamera(available);
+        if (best && best.deviceId !== currentDeviceId) {
+          const success = await startCamera(best.deviceId);
+          if (!success) console.warn("最佳鏡頭打不開，維持原狀");
+        }
+      }, 1500);
+    } catch (err) {
+      console.error("取得鏡頭清單失敗", err);
+    }
+  };
+
+  useEffect(() => {
+    getCameras();
+    navigator.mediaDevices.addEventListener("devicechange", getCameras);
+    return () => {
+      navigator.mediaDevices.removeEventListener("devicechange", getCameras);
+      stopCurrentStream();
+    };
+  }, []);
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 智慧相機（推薦鏡頭會自動啟用一次）</h2>
+      <h2>📷 智慧相機（自動選擇最佳後鏡頭）</h2>
 
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        onError={() => alert("⚠️ video 播放失敗（可能是鏡頭問題）")}
         style={{ width: "100%", maxWidth: "500px", borderRadius: "10px" }}
       />
 
@@ -178,53 +201,45 @@ const SmartCamera = () => {
         <h4>可用鏡頭（排除前鏡頭與虛擬鏡頭）</h4>
         <ul>
           {videoDevices.map((device) => {
+            const isFrontCam = isFront(device.label);
+            const isVirtualCam = isVirtual(device.label);
             const supportsAutoFocus = focusSupportMap[device.deviceId];
             const resolution = resolutionMap[device.deviceId];
+            const failed = failedDevices.has(device.deviceId);
+
             return (
               <li key={device.deviceId}>
-                {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}
+                {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}{" "}
+                {isFrontCam && <span style={{ color: "red" }}>（前鏡頭）</span>}
+                {isVirtualCam && <span style={{ color: "gray" }}>（虛擬）</span>}
                 {device.deviceId === currentDeviceId && (
                   <strong style={{ color: "green" }}> ← 使用中</strong>
                 )}
-                {device.deviceId === bestCameraId && (
-                  <strong style={{ color: "blue", marginLeft: "6px" }}>★ 推薦</strong>
+                {failed && (
+                  <span style={{ color: "orange" }}> ⚠️ 開啟失敗</span>
                 )}
                 <div>
-                  🔍 自動對焦：{supportsAutoFocus === true ? "✅ 有" : supportsAutoFocus === false ? "❌ 無" : "❓ 無法判斷"}
+                  🔍 自動對焦：{" "}
+                  {supportsAutoFocus === undefined
+                    ? "偵測中..."
+                    : supportsAutoFocus
+                    ? "✅ 有"
+                    : "❌ 無"}
                 </div>
                 <div>
-                  📏 解析度：{resolution ? `${resolution.width}×${resolution.height}` : "讀取中..."}
+                  📏 解析度：{" "}
+                  {resolution
+                    ? `${resolution.width}×${resolution.height}`
+                    : "讀取中..."}
                 </div>
-                <button onClick={() => startCamera(device.deviceId)}>切換到此鏡頭</button>
+                <button onClick={() => startCamera(device.deviceId)}>
+                  切換到此鏡頭
+                </button>
               </li>
             );
           })}
         </ul>
       </div>
-
-      {cameraDebugInfo && (
-        <div style={{ marginTop: "30px", padding: "10px", background: "#f9f9f9", border: "1px dashed #ccc" }}>
-          <h4>🐛 鏡頭偵錯資訊</h4>
-          {cameraDebugInfo.error ? (
-            <div style={{ color: "red" }}>
-              ❌ 啟用失敗：{cameraDebugInfo.error}<br />
-              deviceId: {cameraDebugInfo.deviceId}
-            </div>
-          ) : (
-            <div>
-              <div>📷 Label：{cameraDebugInfo.label}</div>
-              <div>🆔 ID：{cameraDebugInfo.deviceId}</div>
-              <div>📏 解析度：{cameraDebugInfo.settings.width} × {cameraDebugInfo.settings.height}</div>
-              <div>
-                🔍 對焦能力：
-                {cameraDebugInfo.capabilities?.focusMode
-                  ? cameraDebugInfo.capabilities.focusMode.join(", ")
-                  : "（無資料）"}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 };
