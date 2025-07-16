@@ -1,150 +1,173 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from 'react';
 
-const isIOS = /iPhone|iPad/i.test(navigator.userAgent);
-
-const SmartCamera = () => {
+const CameraViewer = () => {
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const [videoDevices, setVideoDevices] = useState([]);
-  const [currentDeviceId, setCurrentDeviceId] = useState(null);
-  const [imageCapture, setImageCapture] = useState(null);
+  const streamRef = useRef(null);
+  const [info, setInfo] = useState('載入中...');
 
-  const isVirtual = (label = "") => /virtual|obs|snap|manycam/i.test(label);
-  const isFront = (label = "") => /front|前置|facetime|self/i.test(label);
-
-  const stopCurrentStream = () => {
-    const stream = videoRef.current?.srcObject;
-    if (stream && stream.getTracks) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
+  const detectDevicePlatform = () => {
+    const ua = navigator.userAgent;
+    if (/android/i.test(ua)) return 'Android';
+    if (/iphone/i.test(ua)) return 'iPhone';
+    if (/ipad/i.test(ua)) return 'iPad';
+    if (/macintosh/i.test(ua)) return 'Mac';
+    if (/windows/i.test(ua)) return 'Windows';
+    if (/linux/i.test(ua)) return 'Linux';
+    return '未知平台';
   };
 
-  const drawImage = (bitmap) => {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    ctx.drawImage(bitmap, 0, 0);
-  };
-
-  const takePhoto = async () => {
-    if (!imageCapture) return;
-    try {
-      if (!isIOS && imageCapture.takePhoto) {
-        const blob = await imageCapture.takePhoto();
-        const bitmap = await createImageBitmap(blob);
-        drawImage(bitmap);
-      } else {
-        const bitmap = await imageCapture.grabFrame();
-        drawImage(bitmap);
-      }
-    } catch (err) {
-      console.warn("拍照失敗，使用 grabFrame 備案", err);
-      try {
-        const bitmap = await imageCapture.grabFrame();
-        drawImage(bitmap);
-      } catch (e) {
-        console.error("grabFrame 也失敗", e);
-      }
-    }
-  };
-
-  const startCamera = async (deviceId = null) => {
-    stopCurrentStream();
-    setImageCapture(null);
-
-    const constraints = {
-      video: {
-        deviceId: deviceId ? { exact: deviceId } : undefined,
-      },
-    };
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      const track = stream.getVideoTracks()[0];
-      const settings = track.getSettings();
-      setCurrentDeviceId(settings.deviceId);
-      videoRef.current.srcObject = stream;
-
-      try {
-        const capture = new ImageCapture(track);
-        setImageCapture(capture);
-      } catch (err) {
-        console.warn("ImageCapture 初始化失敗", err);
-      }
-    } catch (err) {
-      console.error("相機啟用失敗", err);
-    }
-  };
-
-  const getCameras = async () => {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const cameras = devices.filter(
-        (d) => d.kind === "videoinput" && !isVirtual(d.label) && !isFront(d.label)
-      );
-      setVideoDevices(cameras);
-    } catch (err) {
-      console.error("取得鏡頭清單失敗", err);
-    }
+  const detectBrandFromUserAgent = () => {
+    const ua = navigator.userAgent;
+    if (/SM-|Galaxy|Samsung/i.test(ua)) return 'Samsung';
+    if (/XQ-|SO-|Sony/i.test(ua)) return 'Sony';
+    if (/Pixel/i.test(ua)) return 'Google Pixel';
+    if (/iPhone/i.test(ua)) return 'Apple iPhone';
+    if (/iPad/i.test(ua)) return 'Apple iPad';
+    if (/MI|Redmi|Xiaomi/i.test(ua)) return 'Xiaomi';
+    if (/OnePlus/i.test(ua)) return 'OnePlus';
+    if (/OPPO/i.test(ua)) return 'OPPO';
+    if (/Vivo/i.test(ua)) return 'Vivo';
+    if (/ASUS|Zenfone/i.test(ua)) return 'ASUS';
+    if (/HUAWEI|HONOR/i.test(ua)) return 'Huawei/Honor';
+    return '未知品牌';
   };
 
   useEffect(() => {
-    getCameras();
-    navigator.mediaDevices.addEventListener("devicechange", getCameras);
+    const gatherInfo = async () => {
+      try {
+        const lines = [];
+
+        // Basic UA
+        lines.push(`🧠 User Agent:\n${navigator.userAgent}\n`);
+        lines.push(`📱 預測平台: ${detectDevicePlatform()}`);
+        lines.push(`🏷️ 預測品牌: ${detectBrandFromUserAgent()}`);
+
+        // UA-CH: 嘗試取得高精度裝置資訊
+        if (navigator.userAgentData?.getHighEntropyValues) {
+          try {
+            const uaDetails = await navigator.userAgentData.getHighEntropyValues([
+              'platform',
+              'platformVersion',
+              'model',
+              'architecture',
+              'bitness',
+              'fullVersionList'
+            ]);
+
+            lines.push(`\n🔍 UA-CH 裝置資訊（高精度）:`);
+            Object.entries(uaDetails).forEach(([key, value]) => {
+              lines.push(`• ${key}: ${value}`);
+            });
+          } catch (err) {
+            lines.push('\n⚠️ 無法取得 UA-CH 裝置資訊（可能未授權）');
+          }
+        } else {
+          lines.push('\n⚠️ 瀏覽器不支援 User-Agent Client Hints (UA-CH)');
+        }
+
+        // 啟用相機並抓取設定
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            advanced: [
+              {
+                focusMode: 'manual',
+                focusDistance: 0.1,
+                exposureMode: 'continuous',
+                whiteBalanceMode: 'continuous',
+                zoom: 1.0
+              }
+            ]
+          }
+        });
+        
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(err => {
+            console.error('Error playing video:', err);
+            throw new Error('Failed to start video playback');
+          });
+        }
+
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+          lines.push('\n🎥 MediaTrack Settings:');
+          const settings = videoTrack.getSettings();
+          Object.entries(settings).forEach(([key, value]) => {
+            lines.push(`• ${key}: ${value}`);
+          });
+
+          if (typeof videoTrack.getCapabilities === 'function') {
+            lines.push('\n📈 MediaTrack Capabilities:');
+            const capabilities = videoTrack.getCapabilities();
+            Object.entries(capabilities).forEach(([key, value]) => {
+              lines.push(`• ${key}: ${JSON.stringify(value)}`);
+            });
+          }
+        }
+
+        // 所有相機裝置
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+        lines.push('\n📋 可用相機裝置:');
+        videoInputs.forEach((device, idx) => {
+          lines.push(`相機 ${idx + 1}:`);
+          lines.push(`• label: ${device.label || '(無法取得)'}`);
+          lines.push(`• deviceId: ${device.deviceId}\n`);
+        });
+
+        setInfo(lines.join('\n'));
+      } catch (err) {
+        console.error('Error:', err);
+        setInfo(`❌ 錯誤：${err.message}`);
+      }
+    };
+
+    gatherInfo();
+
+    // 清理函數
     return () => {
-      navigator.mediaDevices.removeEventListener("devicechange", getCameras);
-      stopCurrentStream();
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
     };
   }, []);
 
   return (
-    <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 智慧相機（手動選擇鏡頭）</h2>
-
+    <div style={{ fontFamily: 'sans-serif', padding: '20px' }}>
+      <h2>📷 相機畫面</h2>
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        style={{ width: "100%", maxWidth: "500px", borderRadius: "10px" }}
+        style={{ width: '100%', maxWidth: '500px', border: '1px solid black', borderRadius: '8px' }}
       />
-
-      <div style={{ marginTop: "10px" }}>
-        <button onClick={takePhoto}>📸 拍照</button>
-      </div>
-
-      <canvas
-        ref={canvasRef}
+      <h2 style={{ marginTop: '20px' }}>📦 裝置詳細資訊</h2>
+      <pre
         style={{
-          width: "300px",
-          height: "auto",
-          marginTop: "10px",
-          border: "1px solid #ccc",
+          whiteSpace: 'pre-wrap',
+          background: '#000000ff',
+          padding: '15px',
+          borderRadius: '8px',
+          maxWidth: '500px',
         }}
-      />
-
-      <div style={{ marginTop: "20px" }}>
-        <h4>可用鏡頭（排除前鏡頭與虛擬鏡頭）</h4>
-        <ul>
-          {videoDevices.map((device) => (
-            <li key={device.deviceId}>
-              {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}
-              {device.deviceId === currentDeviceId && (
-                <strong style={{ color: "green" }}> ← 使用中</strong>
-              )}
-              <div style={{ marginTop: "5px" }}>
-                <button onClick={() => startCamera(device.deviceId)}>
-                  切換到此鏡頭
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      </div>
+      >
+        {info}
+      </pre>
     </div>
   );
 };
 
-export default SmartCamera;
-
+export default CameraViewer;
