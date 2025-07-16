@@ -9,11 +9,9 @@ const SmartCamera = () => {
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
   const [imageCapture, setImageCapture] = useState(null);
   const [focusSupportMap, setFocusSupportMap] = useState({});
-  const [resolutionMap, setResolutionMap] = useState({});
 
   const isVirtual = (label = "") => /virtual|obs|snap|manycam/i.test(label);
   const isFront = (label = "") => /front|前置|facetime|self/i.test(label);
-  const isUltraWide = (label = "") => /ultra[- ]?wide/i.test(label);
 
   const stopCurrentStream = () => {
     const stream = videoRef.current?.srcObject;
@@ -74,7 +72,6 @@ const SmartCamera = () => {
     const constraints = {
       video: {
         deviceId: deviceId ? { exact: deviceId } : undefined,
-        facingMode: !deviceId ? { exact: "environment" } : undefined,
       },
     };
 
@@ -84,14 +81,6 @@ const SmartCamera = () => {
       const settings = track.getSettings();
       setCurrentDeviceId(settings.deviceId);
       videoRef.current.srcObject = stream;
-
-      setResolutionMap((prev) => ({
-        ...prev,
-        [settings.deviceId]: {
-          width: settings.width || 0,
-          height: settings.height || 0,
-        },
-      }));
 
       try {
         const capture = new ImageCapture(track);
@@ -112,7 +101,6 @@ const SmartCamera = () => {
       const cameras = devices.filter(
         (d) => d.kind === "videoinput" && !isVirtual(d.label) && !isFront(d.label)
       );
-
       setVideoDevices(cameras);
     } catch (err) {
       console.error("取得鏡頭清單失敗", err);
@@ -130,7 +118,7 @@ const SmartCamera = () => {
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 智慧相機（請手動選擇鏡頭）</h2>
+      <h2>📷 智慧相機（手動選擇鏡頭）</h2>
 
       <video
         ref={videoRef}
@@ -159,7 +147,6 @@ const SmartCamera = () => {
         <ul>
           {videoDevices.map((device) => {
             const supportsAutoFocus = focusSupportMap[device.deviceId];
-            const resolution = resolutionMap[device.deviceId];
 
             return (
               <li key={device.deviceId}>
@@ -175,12 +162,6 @@ const SmartCamera = () => {
                     ? "✅ 有"
                     : "❌ 無"}
                 </div>
-                <div>
-                  📏 解析度：{" "}
-                  {resolution
-                    ? `${resolution.width}×${resolution.height}`
-                    : "讀取中..."}
-                </div>
                 <button onClick={() => startCamera(device.deviceId)}>
                   切換到此鏡頭
                 </button>
@@ -194,3 +175,4 @@ const SmartCamera = () => {
 };
 
 export default SmartCamera;
+
