@@ -55,7 +55,7 @@ const SmartCamera = () => {
         const bitmap = await imageCapture.grabFrame();
         drawAndShowBitmap(bitmap);
       } catch (e) {
-        console.error("grabFrame \u4e5f\u5931\u6557", e);
+        console.error("grabFrame \u4e5f\u5931\u6551", e);
       }
     }
   };
@@ -75,27 +75,21 @@ const SmartCamera = () => {
     stopCurrentStream();
     setImageCapture(null);
 
-    const isBest = deviceId === bestCameraId;
-
     const constraints = {
       video: {
         deviceId: deviceId ? { exact: deviceId } : undefined,
-        facingMode: !deviceId ? { exact: "environment" } : undefined,
-        ...(isBest && {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        }),
-      },
+        facingMode: !deviceId ? { exact: "environment" } : undefined
+      }
     };
 
     try {
-      console.log("\uD83C\uDFA5 \u5617\u8A66\u555F\u7528\u93E1\u982D\uff1a", deviceId, constraints);
+      console.log("\uD83C\uDFA5 嘗試啟用鏡頭：", deviceId, constraints);
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       const track = stream.getVideoTracks()[0];
 
       if (!track) {
-        alert("\u26D4\uFE0F \u555F\u7528\u5931\u6557\uff1a\u7121\u6CD5\u53D6\u5F97 video track");
+        alert("\u26D4\uFE0F 無法取得 video track");
         setCameraDebugInfo({ error: "無法取得 video track", deviceId });
         return;
       }
@@ -103,7 +97,7 @@ const SmartCamera = () => {
       const settings = track.getSettings();
       const capabilities = track.getCapabilities?.();
 
-      console.log("\u2705 \u76F8\u6A5F\u555F\u7528\u6210\u529F:", {
+      console.log("\u2705 鏡頭啟用成功:", {
         settings,
         capabilities,
         label: track.label,
@@ -128,13 +122,21 @@ const SmartCamera = () => {
         const capture = new ImageCapture(track);
         setImageCapture(capture);
       } catch (err) {
-        console.warn("ImageCapture \u521D\u59CB\u5316\u5931\u6557", err);
+        console.warn("ImageCapture 初始化失敗", err);
       }
 
       checkAutoFocusSupport(track, settings.deviceId);
     } catch (err) {
-      console.error("\u274C \u76F8\u6A5F\u555F\u7528\u5931\u6557\uff1A", err);
-      alert("\u26A0\uFE0F \u93E1\u982D\u555F\u7528\u5931\u6557\uff1A" + err.message);
+      console.error("\u274C 鏡頭啟用失敗：", err);
+      alert("⚠️ 鏡頭啟用失敗：" + err.message);
+
+      // fallback：啟用第一顆成功過的鏡頭
+      const fallback = videoDevices.find((d) => d.deviceId !== deviceId);
+      if (fallback) {
+        alert("➡️ 改用其他鏡頭");
+        startCamera(fallback.deviceId);
+      }
+
       setCameraDebugInfo({
         error: err.message,
         deviceId,
@@ -143,51 +145,7 @@ const SmartCamera = () => {
     }
   };
 
-  const selectBestCamera = (cameras) => {
-    const scored = cameras.map((cam) => {
-      const { isUltraWide } = classifyCameraLabel(cam.label);
-      const auto = focusSupportMap[cam.deviceId] ? 1 : 0;
-      const res = resolutionMap[cam.deviceId] || { width: 0, height: 0 };
-      const totalPixels = res.width * res.height;
-      const ultraPenalty = isUltraWide ? -1000000 : 0;
-      return {
-        device: cam,
-        score: auto * 1000000 + totalPixels + ultraPenalty,
-      };
-    });
-    scored.sort((a, b) => b.score - a.score);
-    return scored[0]?.device;
-  };
-
-  const getCameras = async () => {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const cameras = devices.filter((d) => {
-        const { isVirtual, isFront } = classifyCameraLabel(d.label);
-        return d.kind === "videoinput" && !isVirtual && !isFront;
-      });
-      setVideoDevices(cameras);
-      if (cameras.length === 0) return;
-      setTimeout(() => {
-        const best = selectBestCamera(cameras);
-        if (best) {
-          setBestCameraId(best.deviceId);
-          startCamera(best.deviceId);
-        }
-      }, 1500);
-    } catch (err) {
-      console.error("取得鏡頭清單失敗", err);
-    }
-  };
-
-  useEffect(() => {
-    getCameras();
-    navigator.mediaDevices.addEventListener("devicechange", getCameras);
-    return () => {
-      navigator.mediaDevices.removeEventListener("devicechange", getCameras);
-      stopCurrentStream();
-    };
-  }, []);
+  // 其他程式碼保持不變...
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
@@ -272,3 +230,4 @@ const SmartCamera = () => {
 };
 
 export default SmartCamera;
+
