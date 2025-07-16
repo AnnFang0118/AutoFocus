@@ -138,7 +138,7 @@ const CameraViewer = () => {
       lines.push(`\n💡 選擇理由：${best.device.label || best.device.deviceId} 擁有最高分 ${best.score}`);
     } else {
       lines.push('\n💡 選擇理由：所有關鍵字比對分數均 ≤ 0，使用第一支候選');
-      best = scored[0];
+      best = scored[2];
     }
     lines.push(`\n🌟 推薦後置鏡頭: ${best.device.label || best.device.deviceId}`);
 
