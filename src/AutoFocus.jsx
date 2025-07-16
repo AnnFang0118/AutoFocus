@@ -5,6 +5,29 @@ const CameraViewer = () => {
   const streamRef = useRef(null);
   const [info, setInfo] = useState('載入中...');
 
+  // 關鍵字窮舉法評分表
+  const keywordWeights = [
+    { keywords: ['macro', 'microscope', 'close-up'], score: 5 },
+    { keywords: ['tele', 'telephoto', 'zoom'], score: 4 },
+    { keywords: ['main', 'standard', 'default'], score: 3 },
+    { keywords: ['ultrawide', 'wide-angle'], score: 2 },
+    { keywords: ['back'], score: 1 },
+    { keywords: ['front', 'selfie'], score: -2 },
+    { keywords: ['depth', 'bokeh', 'tof', '3d'], score: -3 },
+    { keywords: ['ir', 'aux', 'unknown'], score: -5 }
+  ];
+
+  const scoreCameraLabel = (label = '') => {
+    const l = label.toLowerCase();
+    let score = 0;
+    for (const { keywords, score: kwScore } of keywordWeights) {
+      if (keywords.some(keyword => l.includes(keyword))) {
+        score += kwScore;
+      }
+    }
+    return score;
+  };
+
   const detectDevicePlatform = () => {
     const ua = navigator.userAgent;
     if (/android/i.test(ua)) return 'Android';
@@ -37,12 +60,11 @@ const CameraViewer = () => {
       try {
         const lines = [];
 
-        // Basic UA
         lines.push(`🧠 User Agent:\n${navigator.userAgent}\n`);
         lines.push(`📱 預測平台: ${detectDevicePlatform()}`);
         lines.push(`🏷️ 預測品牌: ${detectBrandFromUserAgent()}`);
 
-        // UA-CH: 嘗試取得高精度裝置資訊
+        // UA-CH（高精度）
         if (navigator.userAgentData?.getHighEntropyValues) {
           try {
             const uaDetails = await navigator.userAgentData.getHighEntropyValues([
@@ -53,47 +75,56 @@ const CameraViewer = () => {
               'bitness',
               'fullVersionList'
             ]);
-
             lines.push(`\n🔍 UA-CH 裝置資訊（高精度）:`);
             Object.entries(uaDetails).forEach(([key, value]) => {
               lines.push(`• ${key}: ${value}`);
             });
-          } catch (err) {
-            lines.push('\n⚠️ 無法取得 UA-CH 裝置資訊（可能未授權）');
+          } catch {
+            lines.push('\n⚠️ 無法取得 UA-CH 裝置資訊');
           }
         } else {
-          lines.push('\n⚠️ 瀏覽器不支援 User-Agent Client Hints (UA-CH)');
+          lines.push('\n⚠️ 瀏覽器不支援 UA-CH');
         }
 
-        // 啟用相機並抓取設定
+        // 相機裝置列表
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+
+        if (videoInputs.length === 0) throw new Error('找不到任何相機裝置');
+
+        // 每顆相機評分
+        lines.push('\n📋 可用相機裝置:');
+        const scored = videoInputs.map((d, i) => {
+          const score = scoreCameraLabel(d.label || '');
+          lines.push(`相機 ${i + 1}:`);
+          lines.push(`• label: ${d.label || '(無法取得)'}`);
+          lines.push(`• deviceId: ${d.deviceId}`);
+          lines.push(`• 推測用途: ${score >= 4 ? '🔍 微距/望遠' : score >= 2 ? '📷 主鏡頭' : score < 0 ? '🙈 前鏡頭或輔助鏡' : '❓ 無法判斷'}`);
+          return { ...d, score };
+        });
+
+        const bestCamera = scored.sort((a, b) => b.score - a.score)[0];
+        lines.push(`\n🌟 推薦鏡頭: ${bestCamera?.label || '(無法判斷)'}`);
+
+        // 關閉舊串流
         if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current.getTracks().forEach(t => t.stop());
         }
 
+        // 開啟最適合鏡頭
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: 'environment',
+            deviceId: bestCamera.deviceId,
             width: { ideal: 1920 },
             height: { ideal: 1080 },
-            advanced: [
-              {
-                focusMode: 'manual',
-                focusDistance: 0.1,
-                exposureMode: 'continuous',
-                whiteBalanceMode: 'continuous',
-                zoom: 1.0
-              }
-            ]
+            facingMode: 'environment'
           }
         });
-        
+
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(err => {
-            console.error('Error playing video:', err);
-            throw new Error('Failed to start video playback');
-          });
+          await videoRef.current.play();
         }
 
         const videoTrack = stream.getVideoTracks()[0];
@@ -113,26 +144,16 @@ const CameraViewer = () => {
           }
         }
 
-        // 所有相機裝置
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoInputs = devices.filter(d => d.kind === 'videoinput');
-        lines.push('\n📋 可用相機裝置:');
-        videoInputs.forEach((device, idx) => {
-          lines.push(`相機 ${idx + 1}:`);
-          lines.push(`• label: ${device.label || '(無法取得)'}`);
-          lines.push(`• deviceId: ${device.deviceId}\n`);
-        });
-
+        lines.push('\n📌 註：鏡頭用途是根據關鍵字比對推測，實際效果可能會因手機品牌與瀏覽器不同而異。');
         setInfo(lines.join('\n'));
       } catch (err) {
-        console.error('Error:', err);
+        console.error(err);
         setInfo(`❌ 錯誤：${err.message}`);
       }
     };
 
     gatherInfo();
 
-    // 清理函數
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
@@ -158,11 +179,15 @@ const CameraViewer = () => {
       <pre
         style={{
           whiteSpace: 'pre-wrap',
-          background: '#000000ff',
-          color:'white',
+          background: '#f5f5f5',
           padding: '15px',
           borderRadius: '8px',
-          maxWidth: '500px',
+          width: '100%',
+          overflowX: 'auto',
+          fontSize: '14px',
+          lineHeight: '1.5',
+          wordBreak: 'break-word',
+          color: '#222'
         }}
       >
         {info}
