@@ -159,6 +159,7 @@ const CameraViewer = () => {
         style={{
           whiteSpace: 'pre-wrap',
           background: '#000000ff',
+          color:'white',
           padding: '15px',
           borderRadius: '8px',
           maxWidth: '500px',
