@@ -5,6 +5,44 @@ const CameraViewer = () => {
   const streamRef = useRef(null);
   const [info, setInfo] = useState('載入中...');
 
+  // 打分關鍵字表
+  const keywordWeights = [
+    { keywords: ['macro', 'microscope', 'close-up'], score: 5 },
+    { keywords: ['tele', 'telephoto', 'zoom'], score: 4 },
+    { keywords: ['main', 'standard', 'default'], score: 3 },
+    { keywords: ['back'], score: 2 },
+    { keywords: ['ultrawide', 'wide-angle', 'wide'], score: 1 },
+    { keywords: ['front', 'selfie'], score: -2 },
+    { keywords: ['depth', 'bokeh', 'tof', '3d'], score: -3 },
+    { keywords: ['ir', 'aux', 'unknown'], score: -5 }
+  ];
+
+  // 根據 label 打分
+  const scoreCameraLabel = (label = '') => {
+    const l = label.toLowerCase();
+    if (!l) return -999; // 尚未授權或無資訊
+    let score = 0;
+    for (const { keywords, score: kwScore } of keywordWeights) {
+      if (keywords.some(k => l.includes(k))) score += kwScore;
+    }
+    // fallback：Camera 0 通常為主鏡頭
+    if (/camera\s?0/.test(l)) score += 2;
+    return score;
+  };
+
+  // 探測鏡頭 focusDistance 能力
+  const probeFocusDistance = async (deviceId) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId } });
+      const track = stream.getVideoTracks()[0];
+      const caps = track.getCapabilities();
+      stream.getTracks().forEach(t => t.stop());
+      return caps.focusDistance || null;
+    } catch {
+      return null;
+    }
+  };
+
   const detectDevicePlatform = () => {
     const ua = navigator.userAgent;
     if (/android/i.test(ua)) return 'Android';
@@ -37,65 +75,75 @@ const CameraViewer = () => {
       try {
         const lines = [];
 
-        // Basic UA
+        // 基本 UA 與裝置資訊
         lines.push(`🧠 User Agent:\n${navigator.userAgent}\n`);
         lines.push(`📱 預測平台: ${detectDevicePlatform()}`);
         lines.push(`🏷️ 預測品牌: ${detectBrandFromUserAgent()}`);
 
-        // UA-CH: 嘗試取得高精度裝置資訊
+        // UA-CH
         if (navigator.userAgentData?.getHighEntropyValues) {
           try {
             const uaDetails = await navigator.userAgentData.getHighEntropyValues([
-              'platform',
-              'platformVersion',
-              'model',
-              'architecture',
-              'bitness',
-              'fullVersionList'
+              'platform', 'platformVersion', 'model', 'architecture', 'bitness', 'fullVersionList'
             ]);
-
             lines.push(`\n🔍 UA-CH 裝置資訊（高精度）:`);
             Object.entries(uaDetails).forEach(([key, value]) => {
               lines.push(`• ${key}: ${value}`);
             });
-          } catch (err) {
+          } catch {
             lines.push('\n⚠️ 無法取得 UA-CH 裝置資訊（可能未授權）');
           }
         } else {
           lines.push('\n⚠️ 瀏覽器不支援 User-Agent Client Hints (UA-CH)');
         }
 
-        // 啟用相機並抓取設定
+        // 列出並評估所有鏡頭
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+        if (videoInputs.length === 0) throw new Error('找不到任何相機裝置');
+
+        // 打分 & 探測
+        const cams = await Promise.all(
+          videoInputs.map(async (d, idx) => {
+            const label = d.label || `Camera ${idx}`;
+            const labelScore = scoreCameraLabel(label);
+            const focusDist = await probeFocusDistance(d.deviceId);
+            return { ...d, label, labelScore, focusDist };
+          })
+        );
+
+        lines.push('\n📋 可用相機裝置:');
+        cams.forEach((cam, i) => {
+          lines.push(`鏡頭 ${i + 1}:`);
+          lines.push(`• label: ${cam.label}`);
+          lines.push(`• labelScore: ${cam.labelScore}`);
+          lines.push(`• focusDistance: ${cam.focusDist ? `min=${cam.focusDist.min}, max=${cam.focusDist.max}` : '(不支援)'}`);
+        });
+
+        // 選出最佳鏡頭
+        let best = cams[0];
+        const withFocus = cams.filter(c => c.focusDist);
+        if (withFocus.length > 0) {
+          best = withFocus.reduce((a, b) => (a.focusDist.min < b.focusDist.min ? a : b));
+        } else {
+          best = cams.reduce((a, b) => (a.labelScore > b.labelScore ? a : b));
+        }
+        lines.push(`\n🌟 推薦鏡頭: ${best.label}`);
+
+        // 關閉舊串流
         if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current.getTracks().forEach(t => t.stop());
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: 'environment',
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            advanced: [
-              {
-                focusMode: 'manual',
-                focusDistance: 0.1,
-                exposureMode: 'continuous',
-                whiteBalanceMode: 'continuous',
-                zoom: 1.0
-              }
-            ]
-          }
-        });
-        
+        // 啟用最佳鏡頭
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: best.deviceId, width: { ideal: 1920 }, height: { ideal: 1080 } } });
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(err => {
-            console.error('Error playing video:', err);
-            throw new Error('Failed to start video playback');
-          });
+          await videoRef.current.play();
         }
 
+        // 顯示 MediaTrack 設定與能力
         const videoTrack = stream.getVideoTracks()[0];
         if (videoTrack) {
           lines.push('\n🎥 MediaTrack Settings:');
@@ -103,26 +151,16 @@ const CameraViewer = () => {
           Object.entries(settings).forEach(([key, value]) => {
             lines.push(`• ${key}: ${value}`);
           });
-
           if (typeof videoTrack.getCapabilities === 'function') {
             lines.push('\n📈 MediaTrack Capabilities:');
-            const capabilities = videoTrack.getCapabilities();
-            Object.entries(capabilities).forEach(([key, value]) => {
+            const caps = videoTrack.getCapabilities();
+            Object.entries(caps).forEach(([key, value]) => {
               lines.push(`• ${key}: ${JSON.stringify(value)}`);
             });
           }
         }
 
-        // 所有相機裝置
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoInputs = devices.filter(d => d.kind === 'videoinput');
-        lines.push('\n📋 可用相機裝置:');
-        videoInputs.forEach((device, idx) => {
-          lines.push(`相機 ${idx + 1}:`);
-          lines.push(`• label: ${device.label || '(無法取得)'}`);
-          lines.push(`• deviceId: ${device.deviceId}\n`);
-        });
-
+        lines.push('\n📌 註：鏡頭用途推測基於 label & focusDistance，實際效果因裝置而異。');
         setInfo(lines.join('\n'));
       } catch (err) {
         console.error('Error:', err);
@@ -131,8 +169,6 @@ const CameraViewer = () => {
     };
 
     gatherInfo();
-
-    // 清理函數
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
@@ -159,10 +195,14 @@ const CameraViewer = () => {
         style={{
           whiteSpace: 'pre-wrap',
           background: '#000000ff',
-          color:'white',
+          color: 'white',
           padding: '15px',
           borderRadius: '8px',
           maxWidth: '500px',
+          overflowX: 'auto',
+          fontSize: '14px',
+          lineHeight: '1.5',
+          wordBreak: 'break-word'
         }}
       >
         {info}
