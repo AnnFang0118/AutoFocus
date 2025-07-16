@@ -133,12 +133,12 @@ const CameraViewer = () => {
 
     // 7. 選出最高分者並說明理由
     scored.sort((a, b) => b.score - a.score);
-    let best = scored[2];
+    let best = scored[3];
     if (best.score > 0) {
       lines.push(`\n💡 選擇理由：${best.device.label || best.device.deviceId} 擁有最高分 ${best.score}`);
     } else {
       lines.push('\n💡 選擇理由：所有關鍵字比對分數均 ≤ 0，使用第一支候選');
-      best = scored[2];
+      best = scored[3];
     }
     lines.push(`\n🌟 推薦後置鏡頭: ${best.device.label || best.device.deviceId}`);
 
