@@ -116,29 +116,23 @@ const CameraViewer = () => {
       lines.push(`鏡頭 ${i+1}: ${s.device.label || s.device.deviceId} → 分數 ${s.score}`);
     });
 
-    // 6. 同分時優先 camera 0 的 tie-breaker
-    // 暫排序看前兩名是否同分
+    // 6. 同分時預選第二支候選鏡頭
+    // 先排序檢查前兩名是否同分
     const temp = [...scored].sort((a, b) => b.score - a.score);
+    let bestIndex = 0;
     if (temp.length > 1 && temp[0].score === temp[1].score) {
-      const zeroCam = temp.find(s => /camera\s*0/i.test(s.device.label || ''));
-      if (zeroCam) {
-        scored.sort((a, b) => {
-          if (a.device.deviceId === zeroCam.device.deviceId) return -1;
-          if (b.device.deviceId === zeroCam.device.deviceId) return 1;
-          return b.score - a.score;
-        });
-        lines.push('\n🔀 Tie-breaker: 同分時優先 camera 0');
-      }
+      bestIndex = 1;
+      lines.push('\n🔀 Tie-breaker: 分數相同，預選第二支候選鏡頭');
     }
 
-    // 7. 選出最高分者並說明理由
+    // 7. 選出最佳鏡頭並說明理由
+    // 先根據分數排序
     scored.sort((a, b) => b.score - a.score);
-    let best = scored[0];
+    const best = scored[bestIndex];
     if (best.score > 0) {
       lines.push(`\n💡 選擇理由：${best.device.label || best.device.deviceId} 擁有最高分 ${best.score}`);
     } else {
       lines.push('\n💡 選擇理由：所有關鍵字比對分數均 ≤ 0，使用第一支候選');
-      best = scored[0];
     }
     lines.push(`\n🌟 推薦後置鏡頭: ${best.device.label || best.device.deviceId}`);
 
@@ -169,7 +163,7 @@ const CameraViewer = () => {
 
     // 10. 顯示 MediaTrack Settings & Capabilities
     if (streamRef.current) {
-      const track = streamRef.current.getVideoTracks()[1];
+      const track = streamRef.current.getVideoTracks()[0];
       lines.push('\n🎥 MediaTrack Settings:');
       Object.entries(track.getSettings()).forEach(([k,v]) =>
         lines.push(`• ${k}: ${v}`)
@@ -191,7 +185,7 @@ const CameraViewer = () => {
         onClick={gatherInfo}
         style={{ marginBottom: '10px', padding: '8px 16px', fontSize: '16px' }}
       >
-        啟動偵測最佳後鏡頭
+        啟動偵測最佳後置鏡頭
       </button>
 
       <h2>📷 相機畫面</h2>
