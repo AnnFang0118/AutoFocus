@@ -169,7 +169,7 @@ const CameraViewer = () => {
 
     // 10. 顯示 MediaTrack Settings & Capabilities
     if (streamRef.current) {
-      const track = streamRef.current.getVideoTracks()[0];
+      const track = streamRef.current.getVideoTracks()[1];
       lines.push('\n🎥 MediaTrack Settings:');
       Object.entries(track.getSettings()).forEach(([k,v]) =>
         lines.push(`• ${k}: ${v}`)
