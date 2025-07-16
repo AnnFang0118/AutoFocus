@@ -68,21 +68,28 @@ const SmartCamera = () => {
     }
   };
 
+  const getMediaWithTimeout = (constraints, timeout = 5000) =>
+    Promise.race([
+      navigator.mediaDevices.getUserMedia(constraints),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("getUserMedia timeout")), timeout)
+      ),
+    ]);
+
   const startCamera = async (deviceId = null) => {
     stopCurrentStream();
     setImageCapture(null);
-
     console.log("⚙️ 嘗試啟用鏡頭", deviceId);
 
     const constraints = {
       video: {
-        deviceId: deviceId ? { ideal: deviceId } : undefined,
+        deviceId: deviceId ? { exact: deviceId } : undefined,
         facingMode: !deviceId ? { ideal: "environment" } : undefined,
       },
     };
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await getMediaWithTimeout(constraints, 5000);
       const track = stream.getVideoTracks()[0];
       const settings = track.getSettings();
       console.log("✅ getUserMedia 成功", settings);
@@ -90,14 +97,11 @@ const SmartCamera = () => {
       videoRef.current.srcObject = stream;
       setCurrentDeviceId(settings.deviceId);
 
-      let capture = null;
       try {
-        capture = new ImageCapture(track);
+        const capture = new ImageCapture(track);
         setImageCapture(capture);
-
         const bitmap = await capture.grabFrame();
         drawImage(bitmap);
-
         setResolutionMap((prev) => ({
           ...prev,
           [settings.deviceId]: {
@@ -106,32 +110,15 @@ const SmartCamera = () => {
           },
         }));
       } catch (e) {
-        console.warn("⚠️ ImageCapture 或 grabFrame 失敗", e);
+        console.warn("⚠️ ImageCapture / grabFrame 失敗", e);
       }
 
       checkAutoFocusSupport(track, settings.deviceId);
       return true;
     } catch (err) {
-      console.error("❌ 相機啟用失敗", deviceId, err.name, err.message);
-
-      // fallback 嘗試完全不指定裝置
-      try {
-        console.warn("🔁 fallback 使用 video: true 嘗試開啟鏡頭");
-        const fallbackStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-        });
-        const fallbackTrack = fallbackStream.getVideoTracks()[0];
-        const fallbackSettings = fallbackTrack.getSettings();
-
-        videoRef.current.srcObject = fallbackStream;
-        setCurrentDeviceId(fallbackSettings.deviceId);
-
-        return true;
-      } catch (fallbackErr) {
-        console.error("❌ fallback 也失敗", fallbackErr.name, fallbackErr.message);
-        setFailedDevices((prev) => new Set(prev).add(deviceId));
-        return false;
-      }
+      console.error("❌ 相機啟用失敗", deviceId, err.name || "", err.message || "");
+      setFailedDevices((prev) => new Set(prev).add(deviceId));
+      return false;
     }
   };
 
@@ -141,7 +128,6 @@ const SmartCamera = () => {
       const res = resolutionMap[cam.deviceId] || { width: 0, height: 0 };
       const totalPixels = res.width * res.height;
       const ultraPenalty = isUltraWide(cam.label) ? -1000000 : 0;
-
       return {
         device: cam,
         score: auto * 1000000 + totalPixels + ultraPenalty,
@@ -164,13 +150,11 @@ const SmartCamera = () => {
 
       if (validCameras.length === 0) return;
 
-      // 嘗試啟用第一顆可用鏡頭
       for (let cam of validCameras) {
         const success = await startCamera(cam.deviceId);
         if (success) break;
       }
 
-      // 過 1.5 秒後選擇最佳鏡頭
       setTimeout(async () => {
         const available = validCameras.filter(
           (d) => !failedDevices.has(d.deviceId)
@@ -197,7 +181,7 @@ const SmartCamera = () => {
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
-      <h2>📷 智慧相機（自動選擇最佳後鏡頭）</h2>
+      <h2>📷 智慧相機（含 timeout 防止卡死）</h2>
 
       <video
         ref={videoRef}
@@ -258,7 +242,12 @@ const SmartCamera = () => {
                     ? `${resolution.width}×${resolution.height}`
                     : "讀取中..."}
                 </div>
-                <button onClick={() => startCamera(device.deviceId)}>
+                <button
+                  onClick={() => {
+                    console.log("🖱️ 手動切換到", device.deviceId);
+                    startCamera(device.deviceId);
+                  }}
+                >
                   切換到此鏡頭
                 </button>
               </li>
