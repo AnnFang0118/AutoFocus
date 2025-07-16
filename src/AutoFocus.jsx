@@ -116,7 +116,22 @@ const CameraViewer = () => {
       lines.push(`鏡頭 ${i+1}: ${s.device.label || s.device.deviceId} → 分數 ${s.score}`);
     });
 
-    // 6. 選出最高分者並說明理由
+    // 6. 同分時優先 camera 0 的 tie-breaker
+    // 暫排序看前兩名是否同分
+    const temp = [...scored].sort((a, b) => b.score - a.score);
+    if (temp.length > 1 && temp[0].score === temp[1].score) {
+      const zeroCam = temp.find(s => /camera\s*0/i.test(s.device.label || ''));
+      if (zeroCam) {
+        scored.sort((a, b) => {
+          if (a.device.deviceId === zeroCam.device.deviceId) return -1;
+          if (b.device.deviceId === zeroCam.device.deviceId) return 1;
+          return b.score - a.score;
+        });
+        lines.push('\n🔀 Tie-breaker: 同分時優先 camera 0');
+      }
+    }
+
+    // 7. 選出最高分者並說明理由
     scored.sort((a, b) => b.score - a.score);
     let best = scored[0];
     if (best.score > 0) {
@@ -127,12 +142,12 @@ const CameraViewer = () => {
     }
     lines.push(`\n🌟 推薦後置鏡頭: ${best.device.label || best.device.deviceId}`);
 
-    // 7. 停掉舊串流
+    // 8. 停掉舊串流
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
     }
 
-    // 8. 啟動推薦鏡頭
+    // 9. 啟動推薦鏡頭
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -147,12 +162,12 @@ const CameraViewer = () => {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
-      lines.push('✅ 已啟動推薦後置鏡頭');
+      lines.push('\n✅ 已啟動推薦後置鏡頭');
     } catch (e) {
-      lines.push(`❌ 啟動推薦鏡頭失敗：${e.message}`);
+      lines.push(`\n❌ 啟動推薦鏡頭失敗：${e.message}`);
     }
 
-    // 9. 顯示 MediaTrack Settings & Capabilities
+    // 10. 顯示 MediaTrack Settings & Capabilities
     if (streamRef.current) {
       const track = streamRef.current.getVideoTracks()[0];
       lines.push('\n🎥 MediaTrack Settings:');
