@@ -143,28 +143,120 @@ const SmartCamera = () => {
     }
   };
 
-  // 將 cameraDebugInfo 放在 render 中下方使用（略）...
+  const selectBestCamera = (cameras) => {
+    const scored = cameras.map((cam) => {
+      const { isUltraWide } = classifyCameraLabel(cam.label);
+      const auto = focusSupportMap[cam.deviceId] ? 1 : 0;
+      const res = resolutionMap[cam.deviceId] || { width: 0, height: 0 };
+      const totalPixels = res.width * res.height;
+      const ultraPenalty = isUltraWide ? -1000000 : 0;
+      return {
+        device: cam,
+        score: auto * 1000000 + totalPixels + ultraPenalty,
+      };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0]?.device;
+  };
+
+  const getCameras = async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter((d) => {
+        const { isVirtual, isFront } = classifyCameraLabel(d.label);
+        return d.kind === "videoinput" && !isVirtual && !isFront;
+      });
+      setVideoDevices(cameras);
+      if (cameras.length === 0) return;
+      setTimeout(() => {
+        const best = selectBestCamera(cameras);
+        if (best) {
+          setBestCameraId(best.deviceId);
+          startCamera(best.deviceId);
+        }
+      }, 1500);
+    } catch (err) {
+      console.error("取得鏡頭清單失敗", err);
+    }
+  };
+
+  useEffect(() => {
+    getCameras();
+    navigator.mediaDevices.addEventListener("devicechange", getCameras);
+    return () => {
+      navigator.mediaDevices.removeEventListener("devicechange", getCameras);
+      stopCurrentStream();
+    };
+  }, []);
 
   return (
-    <div>
-      {/* 其他原有 UI... */}
+    <div style={{ fontFamily: "sans-serif", padding: "20px" }}>
+      <h2>📷 智慧相機（推薦鏡頭會自動啟用一次）</h2>
+
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        onError={() => alert("⚠️ video 播放失敗（可能是鏡頭問題）")}
+        style={{ width: "100%", maxWidth: "500px", borderRadius: "10px" }}
+      />
+
+      <div style={{ marginTop: "10px" }}>
+        <button onClick={takePhoto}>📸 拍照</button>
+      </div>
+
+      <canvas
+        ref={canvasRef}
+        style={{
+          width: "300px",
+          height: "auto",
+          marginTop: "10px",
+          border: "1px solid #ccc",
+        }}
+      />
+
+      <div style={{ marginTop: "20px" }}>
+        <h4>可用鏡頭（排除前鏡頭與虛擬鏡頭）</h4>
+        <ul>
+          {videoDevices.map((device) => {
+            const supportsAutoFocus = focusSupportMap[device.deviceId];
+            const resolution = resolutionMap[device.deviceId];
+            return (
+              <li key={device.deviceId}>
+                {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}
+                {device.deviceId === currentDeviceId && (
+                  <strong style={{ color: "green" }}> ← 使用中</strong>
+                )}
+                {device.deviceId === bestCameraId && (
+                  <strong style={{ color: "blue", marginLeft: "6px" }}>★ 推薦</strong>
+                )}
+                <div>
+                  🔍 自動對焦：{supportsAutoFocus === true ? "✅ 有" : supportsAutoFocus === false ? "❌ 無" : "❓ 無法判斷"}
+                </div>
+                <div>
+                  📏 解析度：{resolution ? `${resolution.width}×${resolution.height}` : "讀取中..."}
+                </div>
+                <button onClick={() => startCamera(device.deviceId)}>切換到此鏡頭</button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
 
       {cameraDebugInfo && (
         <div style={{ marginTop: "30px", padding: "10px", background: "#f9f9f9", border: "1px dashed #ccc" }}>
           <h4>🐛 鏡頭偵錯資訊</h4>
           {cameraDebugInfo.error ? (
             <div style={{ color: "red" }}>
-              ❌ 啟用失敗：{cameraDebugInfo.error}
-              <br />
+              ❌ 啟用失敗：{cameraDebugInfo.error}<br />
               deviceId: {cameraDebugInfo.deviceId}
             </div>
           ) : (
             <div>
               <div>📷 Label：{cameraDebugInfo.label}</div>
               <div>🆔 ID：{cameraDebugInfo.deviceId}</div>
-              <div>
-                📏 解析度：{cameraDebugInfo.settings.width} × {cameraDebugInfo.settings.height}
-              </div>
+              <div>📏 解析度：{cameraDebugInfo.settings.width} × {cameraDebugInfo.settings.height}</div>
               <div>
                 🔍 對焦能力：
                 {cameraDebugInfo.capabilities?.focusMode
@@ -180,5 +272,3 @@ const SmartCamera = () => {
 };
 
 export default SmartCamera;
-
-
