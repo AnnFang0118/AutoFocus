@@ -8,7 +8,6 @@ const SmartCamera = () => {
   const [videoDevices, setVideoDevices] = useState([]);
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
   const [imageCapture, setImageCapture] = useState(null);
-  const [focusSupportMap, setFocusSupportMap] = useState({});
 
   const isVirtual = (label = "") => /virtual|obs|snap|manycam/i.test(label);
   const isFront = (label = "") => /front|前置|facetime|self/i.test(label);
@@ -50,21 +49,6 @@ const SmartCamera = () => {
     }
   };
 
-  const checkAutoFocusSupport = async (track, deviceId) => {
-    try {
-      const capabilities = track.getCapabilities?.();
-      const focusModes = capabilities?.focusMode || [];
-      const hasAutoFocus = focusModes.includes("auto");
-
-      setFocusSupportMap((prev) => ({
-        ...prev,
-        [deviceId]: hasAutoFocus,
-      }));
-    } catch (err) {
-      console.warn(`偵測 ${deviceId} 對焦能力失敗`, err);
-    }
-  };
-
   const startCamera = async (deviceId = null) => {
     stopCurrentStream();
     setImageCapture(null);
@@ -88,8 +72,6 @@ const SmartCamera = () => {
       } catch (err) {
         console.warn("ImageCapture 初始化失敗", err);
       }
-
-      checkAutoFocusSupport(track, settings.deviceId);
     } catch (err) {
       console.error("相機啟用失敗", err);
     }
@@ -145,29 +127,19 @@ const SmartCamera = () => {
       <div style={{ marginTop: "20px" }}>
         <h4>可用鏡頭（排除前鏡頭與虛擬鏡頭）</h4>
         <ul>
-          {videoDevices.map((device) => {
-            const supportsAutoFocus = focusSupportMap[device.deviceId];
-
-            return (
-              <li key={device.deviceId}>
-                {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}
-                {device.deviceId === currentDeviceId && (
-                  <strong style={{ color: "green" }}> ← 使用中</strong>
-                )}
-                <div>
-                  🔍 自動對焦：{" "}
-                  {supportsAutoFocus === undefined
-                    ? "偵測中..."
-                    : supportsAutoFocus
-                    ? "✅ 有"
-                    : "❌ 無"}
-                </div>
+          {videoDevices.map((device) => (
+            <li key={device.deviceId}>
+              {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}
+              {device.deviceId === currentDeviceId && (
+                <strong style={{ color: "green" }}> ← 使用中</strong>
+              )}
+              <div style={{ marginTop: "5px" }}>
                 <button onClick={() => startCamera(device.deviceId)}>
                   切換到此鏡頭
                 </button>
-              </li>
-            );
-          })}
+              </div>
+            </li>
+          ))}
         </ul>
       </div>
     </div>
