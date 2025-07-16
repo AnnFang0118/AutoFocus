@@ -76,7 +76,7 @@ const SmartCamera = () => {
 
     const constraints = {
       video: {
-        deviceId: deviceId ? { exact: deviceId } : undefined,
+        deviceId: deviceId ? { ideal: deviceId } : undefined,
         facingMode: !deviceId ? { ideal: "environment" } : undefined,
       },
     };
@@ -94,44 +94,41 @@ const SmartCamera = () => {
       try {
         capture = new ImageCapture(track);
         setImageCapture(capture);
-      } catch (e) {
-        console.warn("⚠️ ImageCapture 初始化失敗", e);
-      }
 
-      try {
-        if (capture) {
-          const bitmap = await capture.grabFrame();
-          drawImage(bitmap);
-          setResolutionMap((prev) => ({
-            ...prev,
-            [settings.deviceId]: {
-              width: bitmap.width,
-              height: bitmap.height,
-            },
-          }));
-        }
+        const bitmap = await capture.grabFrame();
+        drawImage(bitmap);
+
+        setResolutionMap((prev) => ({
+          ...prev,
+          [settings.deviceId]: {
+            width: bitmap.width,
+            height: bitmap.height,
+          },
+        }));
       } catch (e) {
-        console.warn("⚠️ 無法 grabFrame", e);
+        console.warn("⚠️ ImageCapture 或 grabFrame 失敗", e);
       }
 
       checkAutoFocusSupport(track, settings.deviceId);
       return true;
     } catch (err) {
-      console.error("❌ 相機啟用失敗", deviceId, err);
+      console.error("❌ 相機啟用失敗", deviceId, err.name, err.message);
 
-      // Fallback 嘗試一般 video:true，避免某些裝置 exact 失敗
+      // fallback 嘗試完全不指定裝置
       try {
-        console.warn("🔁 嘗試 fallback 到 video:true");
+        console.warn("🔁 fallback 使用 video: true 嘗試開啟鏡頭");
         const fallbackStream = await navigator.mediaDevices.getUserMedia({
           video: true,
         });
+        const fallbackTrack = fallbackStream.getVideoTracks()[0];
+        const fallbackSettings = fallbackTrack.getSettings();
+
         videoRef.current.srcObject = fallbackStream;
-        const track = fallbackStream.getVideoTracks()[0];
-        const fallbackSettings = track.getSettings();
         setCurrentDeviceId(fallbackSettings.deviceId);
+
         return true;
       } catch (fallbackErr) {
-        console.error("❌ fallback 也失敗", fallbackErr);
+        console.error("❌ fallback 也失敗", fallbackErr.name, fallbackErr.message);
         setFailedDevices((prev) => new Set(prev).add(deviceId));
         return false;
       }
@@ -167,13 +164,13 @@ const SmartCamera = () => {
 
       if (validCameras.length === 0) return;
 
-      // 啟用第一顆
+      // 嘗試啟用第一顆可用鏡頭
       for (let cam of validCameras) {
         const success = await startCamera(cam.deviceId);
         if (success) break;
       }
 
-      // 過一段時間後選最佳
+      // 過 1.5 秒後選擇最佳鏡頭
       setTimeout(async () => {
         const available = validCameras.filter(
           (d) => !failedDevices.has(d.deviceId)
