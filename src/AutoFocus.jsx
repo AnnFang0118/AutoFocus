@@ -59,7 +59,7 @@ const SmartCamera = () => {
         [deviceId]: focusModes.includes("auto"),
       }));
     } catch (err) {
-      console.warn(無法偵測 ${deviceId} 自動對焦支援狀態, err);
+      console.warn(`無法偵測 ${deviceId} 自動對焦支援狀態`, err);
     }
   };
 
@@ -153,7 +153,7 @@ const SmartCamera = () => {
             const supportsAutoFocus = focusSupportMap[device.deviceId];
             return (
               <li key={device.deviceId}>
-                {device.label || Camera (${device.deviceId.slice(0, 4)}...)}
+                {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}
                 {device.deviceId === currentDeviceId && (
                   <strong style={{ color: "green" }}> ← 使用中</strong>
                 )}
