@@ -72,6 +72,8 @@ const SmartCamera = () => {
     stopCurrentStream();
     setImageCapture(null);
 
+    console.log("⚙️ 嘗試啟用鏡頭", deviceId);
+
     const constraints = {
       video: {
         deviceId: deviceId ? { exact: deviceId } : undefined,
@@ -83,30 +85,56 @@ const SmartCamera = () => {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       const track = stream.getVideoTracks()[0];
       const settings = track.getSettings();
+      console.log("✅ getUserMedia 成功", settings);
+
       videoRef.current.srcObject = stream;
       setCurrentDeviceId(settings.deviceId);
 
-      const capture = new ImageCapture(track);
-      setImageCapture(capture);
+      let capture = null;
+      try {
+        capture = new ImageCapture(track);
+        setImageCapture(capture);
+      } catch (e) {
+        console.warn("⚠️ ImageCapture 初始化失敗", e);
+      }
 
-      const bitmap = await capture.grabFrame();
-      drawImage(bitmap);
-
-      setResolutionMap((prev) => ({
-        ...prev,
-        [settings.deviceId]: {
-          width: bitmap.width,
-          height: bitmap.height,
-        },
-      }));
+      try {
+        if (capture) {
+          const bitmap = await capture.grabFrame();
+          drawImage(bitmap);
+          setResolutionMap((prev) => ({
+            ...prev,
+            [settings.deviceId]: {
+              width: bitmap.width,
+              height: bitmap.height,
+            },
+          }));
+        }
+      } catch (e) {
+        console.warn("⚠️ 無法 grabFrame", e);
+      }
 
       checkAutoFocusSupport(track, settings.deviceId);
-
       return true;
     } catch (err) {
-      console.error("相機啟用失敗", deviceId, err);
-      setFailedDevices((prev) => new Set(prev).add(deviceId));
-      return false;
+      console.error("❌ 相機啟用失敗", deviceId, err);
+
+      // Fallback 嘗試一般 video:true，避免某些裝置 exact 失敗
+      try {
+        console.warn("🔁 嘗試 fallback 到 video:true");
+        const fallbackStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+        });
+        videoRef.current.srcObject = fallbackStream;
+        const track = fallbackStream.getVideoTracks()[0];
+        const fallbackSettings = track.getSettings();
+        setCurrentDeviceId(fallbackSettings.deviceId);
+        return true;
+      } catch (fallbackErr) {
+        console.error("❌ fallback 也失敗", fallbackErr);
+        setFailedDevices((prev) => new Set(prev).add(deviceId));
+        return false;
+      }
     }
   };
 
@@ -131,7 +159,6 @@ const SmartCamera = () => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const cameras = devices.filter((d) => d.kind === "videoinput");
-
       setVideoDevices(cameras);
 
       const validCameras = cameras.filter(
@@ -140,13 +167,13 @@ const SmartCamera = () => {
 
       if (validCameras.length === 0) return;
 
-      // 先啟用第一顆
+      // 啟用第一顆
       for (let cam of validCameras) {
         const success = await startCamera(cam.deviceId);
         if (success) break;
       }
 
-      // 過一段時間挑選最佳
+      // 過一段時間後選最佳
       setTimeout(async () => {
         const available = validCameras.filter(
           (d) => !failedDevices.has(d.deviceId)
@@ -198,7 +225,7 @@ const SmartCamera = () => {
       />
 
       <div style={{ marginTop: "20px" }}>
-        <h4>可用鏡頭（排除前鏡頭與虛擬鏡頭）</h4>
+        <h4>鏡頭清單</h4>
         <ul>
           {videoDevices.map((device) => {
             const isFrontCam = isFront(device.label);
@@ -211,7 +238,9 @@ const SmartCamera = () => {
               <li key={device.deviceId}>
                 {device.label || `Camera (${device.deviceId.slice(0, 4)}...)`}{" "}
                 {isFrontCam && <span style={{ color: "red" }}>（前鏡頭）</span>}
-                {isVirtualCam && <span style={{ color: "gray" }}>（虛擬）</span>}
+                {isVirtualCam && (
+                  <span style={{ color: "gray" }}>（虛擬鏡頭）</span>
+                )}
                 {device.deviceId === currentDeviceId && (
                   <strong style={{ color: "green" }}> ← 使用中</strong>
                 )}
@@ -245,4 +274,3 @@ const SmartCamera = () => {
 };
 
 export default SmartCamera;
-
