@@ -133,7 +133,7 @@ const CameraViewer = () => {
 
     // 7. 選出最高分者並說明理由
     scored.sort((a, b) => b.score - a.score);
-    let best = scored[0];
+    let best = scored[2];
     if (best.score > 0) {
       lines.push(`\n💡 選擇理由：${best.device.label || best.device.deviceId} 擁有最高分 ${best.score}`);
     } else {
