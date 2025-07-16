@@ -22,7 +22,7 @@ const CameraViewer = () => {
     let score = 0;
     if (!l) return -999; // 未授權或無標籤
     for (const { keywords, score: kwScore } of keywordWeights) {
-      if (keywords.some(k => l.includes(k))) {
+      if (keywords.some(keyword => l.includes(keyword))) {
         score += kwScore;
       }
     }
@@ -65,19 +65,26 @@ const CameraViewer = () => {
       try {
         const lines = [];
 
-        // 1. 基本 UA / 平台 / 品牌
+        // 基本 UA / 平台 / 品牌
         lines.push(`🧠 User Agent:\n${navigator.userAgent}\n`);
         lines.push(`📱 預測平台: ${detectDevicePlatform()}`);
         lines.push(`🏷️ 預測品牌: ${detectBrandFromUserAgent()}`);
 
-        // 2. UA-CH 高精度資訊
+        // UA-CH 高精度資訊
         if (navigator.userAgentData?.getHighEntropyValues) {
           try {
             const uaDetails = await navigator.userAgentData.getHighEntropyValues([
-              'platform','platformVersion','model','architecture','bitness','fullVersionList'
+              'platform',
+              'platformVersion',
+              'model',
+              'architecture',
+              'bitness',
+              'fullVersionList',
             ]);
             lines.push(`\n🔍 UA-CH 裝置資訊（高精度）:`);
-            Object.entries(uaDetails).forEach(([k,v]) => lines.push(`• ${k}: ${v}`));
+            Object.entries(uaDetails).forEach(([key, value]) => {
+              lines.push(`• ${key}: ${value}`);
+            });
           } catch {
             lines.push('\n⚠️ 無法取得 UA-CH 裝置資訊');
           }
@@ -85,87 +92,59 @@ const CameraViewer = () => {
           lines.push('\n⚠️ 瀏覽器不支援 UA-CH');
         }
 
-        // 3. 列出所有 videoinput，並過濾出後置鏡頭
+        // 列出所有相機裝置
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoInputs = devices.filter(d => d.kind === 'videoinput');
+
+        // 過濾掉前鏡頭（label 包含 front/selfie）
         const rearCameras = videoInputs.filter(d =>
           !/(front|selfie)/i.test(d.label || '')
         );
+        // 若全部都被過濾，退回原列表
         const candidates = rearCameras.length ? rearCameras : videoInputs;
 
-        lines.push('\n📋 可選後置鏡頭:');
-        candidates.forEach((d,i) => {
-          lines.push(`相機 ${i+1}:`);
-          lines.push(`• label: ${d.label || '(無標籤)'}`);
-          lines.push(`• deviceId: ${d.deviceId}\n`);
+        lines.push('\n📋 可用後置鏡頭（不含前鏡頭）:');
+        candidates.forEach((device, idx) => {
+          lines.push(`相機 ${idx + 1}:`);
+          lines.push(`• label: ${device.label || '(無法取得)'}`);
+          lines.push(`• deviceId: ${device.deviceId}\n`);
         });
 
-        // 定義探測函式
-        const pickByFocusDistance = async list => {
-          const probe = await Promise.all(list.map(async d => {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: d.deviceId }});
-            const track = stream.getVideoTracks()[0];
-            const caps = track.getCapabilities();
-            stream.getTracks().forEach(t => t.stop());
-            return { device: d, minFocus: caps.focusDistance?.min ?? Infinity };
-          }));
-          const avail = probe.filter(p => p.minFocus < Infinity);
-          if (!avail.length) return null;
-          const best = avail.reduce((a,b) => a.minFocus < b.minFocus ? a : b);
-          return best.device;
-        };
+        // 根據 label 計分並找出最高分
+        const scored = candidates.map(d => ({
+          ...d,
+          score: scoreCameraLabel(d.label),
+        }));
+        let best = scored.sort((a, b) => b.score - a.score)[0];
 
-        const pickByMaxResolution = async list => {
-          const probe = await Promise.all(list.map(async d => {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: d.deviceId }});
-            const track = stream.getVideoTracks()[0];
-            const caps = track.getCapabilities();
-            stream.getTracks().forEach(t => t.stop());
-            const maxW = caps.width?.max ?? 0;
-            const maxH = caps.height?.max ?? 0;
-            return { device: d, maxRes: maxW * maxH };
-          }));
-          const best = probe.reduce((a,b) => b.maxRes > a.maxRes ? b : a, probe[0]);
-          return best.maxRes > 0 ? best.device : null;
-        };
-
-        // 4. 三階段推薦
-        let bestDevice = null;
-
-        // 4.1 focusDistance
-        try { bestDevice = await pickByFocusDistance(candidates); } catch {}
-        // 4.2 maxResolution
-        if (!bestDevice) {
-          try { bestDevice = await pickByMaxResolution(candidates); } catch {}
-        }
-        // 4.3 labelScore
-        if (!bestDevice) {
-          const scored = candidates
-            .map(d => ({ device: d, score: scoreCameraLabel(d.label) }))
-            .sort((a,b) => b.score - a.score);
-          if (scored.length && scored[0].score > 0) {
-            bestDevice = scored[0].device;
-          }
-        }
-        // 4.4 ultimate fallback
-        if (!bestDevice) {
-          lines.push('\n⚠️ 自動推薦失敗，使用第一支後置鏡頭作為預設');
-          bestDevice = candidates[0];
+        // 若最高分 ≤ 0，fallback 到第一支後置鏡頭
+        if (best.score <= 0) {
+          lines.push(
+            '\n⚠️ 無法透過關鍵字自動判斷最適鏡頭，改用第一支後置鏡頭作為預設'
+          );
+          best = scored[0];
         }
 
-        lines.push(`\n🌟 推薦後置鏡頭: ${bestDevice.label || `(無標籤，deviceId=${bestDevice.deviceId})`}`);
+        // 顯示推薦
+        lines.push(
+          `\n🌟 推薦後置鏡頭: ${
+            best.label ? best.label : `(無名稱，deviceId=${best.deviceId})`
+          }`
+        );
 
-        // 5. 停掉舊串流並開啟推薦鏡頭
+        // 停掉舊串流
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(t => t.stop());
         }
+
+        // 打開推薦鏡頭
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            deviceId: bestDevice.deviceId,
+            deviceId: best.deviceId,
             width: { ideal: 1920 },
             height: { ideal: 1080 },
             facingMode: 'environment',
-          }
+          },
         });
         streamRef.current = stream;
         if (videoRef.current) {
@@ -173,20 +152,26 @@ const CameraViewer = () => {
           await videoRef.current.play();
         }
 
-        // 6. 顯示 MediaTrack 設定與能力
+        // 顯示 MediaTrack Settings & Capabilities
         const track = stream.getVideoTracks()[0];
         if (track) {
           lines.push('\n🎥 MediaTrack Settings:');
-          Object.entries(track.getSettings()).forEach(([k,v]) => lines.push(`• ${k}: ${v}`));
+          const settings = track.getSettings();
+          Object.entries(settings).forEach(([k, v]) => {
+            lines.push(`• ${k}: ${v}`);
+          });
           if (typeof track.getCapabilities === 'function') {
             lines.push('\n📈 MediaTrack Capabilities:');
-            Object.entries(track.getCapabilities()).forEach(([k,v]) =>
-              lines.push(`• ${k}: ${JSON.stringify(v)}`)
-            );
+            const caps = track.getCapabilities();
+            Object.entries(caps).forEach(([k, v]) => {
+              lines.push(`• ${k}: ${JSON.stringify(v)}`);
+            });
           }
         }
 
-        lines.push('\n📌 註：已過濾前鏡頭，並依序使用 focusDistance、解析度、Label 分數進行自動推薦，最後 fallback。');
+        lines.push(
+          '\n📌 註：已過濾前鏡頭，若自動判斷失敗則採用第一支後置鏡頭。'
+        );
         setInfo(lines.join('\n'));
       } catch (err) {
         console.error(err);
